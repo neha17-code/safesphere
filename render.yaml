@@ -1,0 +1,25 @@
+# Render Blueprint: one click deploys the API + a PostgreSQL database.
+# Free plans are for demos: see docs/DEPLOY.md for the sleep/expiry caveats.
+databases:
+  - name: safesphere-db
+    plan: free
+    databaseName: safesphere
+    user: safesphere
+
+services:
+  - type: web
+    name: safesphere-api
+    runtime: docker
+    plan: free            # change to "starter" for an always-on server (needed for reliable escalation)
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: safesphere-db
+          property: connectionString

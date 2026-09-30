@@ -1,0 +1,10 @@
+<!-- Add inside <manifest> (above <application>) in android/app/src/main/AndroidManifest.xml -->
+<uses-permission android:name="android.permission.INTERNET"/>
+<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+
+<!-- KEEP: POST_NOTIFICATIONS, RECEIVE_BOOT_COMPLETED, SCHEDULE_EXACT_ALARM.
+     REMOVE: USE_EXACT_ALARM -- Google Play restricts it to alarm/calendar apps and may reject the app. -->
+
+<!-- Inside <application>, only while testing against an http:// dev server (NOT for release): -->
+<!-- android:usesCleartextTraffic="true" -->

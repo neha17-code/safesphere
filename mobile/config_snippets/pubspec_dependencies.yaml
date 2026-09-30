@@ -1,0 +1,6 @@
+# Add under `dependencies:` in your existing pubspec.yaml (keep flutter_local_notifications & timezone),
+# then REMOVE `shared_preferences` if nothing else uses it. Run: flutter pub get
+  http: ^1.2.2
+  flutter_secure_storage: ^9.2.2
+  geolocator: ^13.0.1
+  url_launcher: ^6.3.0
