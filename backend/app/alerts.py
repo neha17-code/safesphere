@@ -1,9 +1,9 @@
-"""Turns 'something happened' into SMS messages + audit events."""
+"""Turns 'something happened' into messages + audit events."""
 from sqlalchemy.orm import Session
 
 from .config import settings
 from .models import Consent, Contact, Event, Journey, User
-from .notifier import notifier
+from .notifier import notifier, telegram   # module globals: tests swap them for fakes
 
 
 def link_for(contact: Contact) -> str:
@@ -21,20 +21,29 @@ def maps_link(lat: float | None, lng: float | None) -> str:
     return f"https://maps.google.com/?q={lat},{lng}" if lat is not None and lng is not None else ""
 
 
+def _deliver(contact: Contact, text: str) -> tuple[bool, str]:
+    """Fallback chain: Telegram (if the contact connected it), then SMS. True only if a channel accepted it."""
+    if telegram and contact.telegram_chat_id and telegram.send_message(contact.telegram_chat_id, text):
+        return True, "telegram"
+    if notifier.send_sms(contact.phone, text):
+        return True, "sms"
+    return False, "none"
+
+
 def send_to_contacts(db: Session, owner: User, contacts: list[Contact], text: str,
                      event_type: str, journey: Journey | None = None,
                      lat: float | None = None, lng: float | None = None) -> tuple[int, int]:
     """Send `text` (+ each contact's private link) to CONFIRMED contacts only.
-    Returns (delivered, skipped_because_not_confirmed)."""
+    Returns (delivered, skipped_because_not_confirmed). 'Delivered' means a real channel accepted it."""
     delivered = skipped = 0
     for c in contacts:
         if c.consent != Consent.CONFIRMED.value:
             skipped += 1
             continue
-        ok = notifier.send_sms(c.phone, f"{text}\nLive view: {link_for(c)}")
+        ok, channel = _deliver(c, f"{text}\nLive view: {link_for(c)}")
         delivered += 1 if ok else 0
         log_event(db, owner.id, event_type if ok else event_type + "_FAILED",
-                  f"to {c.name}", journey.id if journey else None, lat, lng, contact_id=c.id)
+                  f"to {c.name} via {channel}", journey.id if journey else None, lat, lng, contact_id=c.id)
     return delivered, skipped
 
 

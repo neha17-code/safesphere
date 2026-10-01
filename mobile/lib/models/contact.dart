@@ -5,6 +5,7 @@ class Contact {
   final String? relationship;
   final int priority;
   final String consent; // PENDING | CONFIRMED | DECLINED
+  final bool telegramConnected;
 
   Contact({
     required this.id,
@@ -12,6 +13,7 @@ class Contact {
     required this.phone,
     required this.priority,
     required this.consent,
+    this.telegramConnected = false,
     this.relationship,
   });
 
@@ -24,5 +26,6 @@ class Contact {
         relationship: j['relationship_label'] as String?,
         priority: j['priority'] as int,
         consent: j['consent'] as String,
+        telegramConnected: (j['telegram_connected'] as bool?) ?? false,
       );
 }

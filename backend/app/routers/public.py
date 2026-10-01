@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import alerts as alerts_mod
 from ..alerts import log_event, maps_link
 from ..database import get_db
 from ..models import Consent, Contact, Event, JourneyStatus, LocationPoint, User, utcnow
@@ -76,7 +77,24 @@ def view(token: str, db: Session = Depends(get_db)):
         link = f' <a href="{escape(maps_link(alert.lat, alert.lng))}">Location</a>' if alert.lat is not None else ""
         parts.append(f'<div class="card bad"><b>Latest alert:</b> {escape(alert.type.replace("_", " ").title())}{link}</div>')
 
-    body = "".join(parts) or f"<p>{who} has no active journey right now. You're all set.</p>"
+    # recently completed journeys: reassure the contact instead of silently showing "nothing"
+    for j in c.journeys:
+        if j.status == JourneyStatus.COMPLETED.value and j.completed_at and (now - j.completed_at).total_seconds() < 3 * 3600:
+            ago = int((now - j.completed_at).total_seconds() // 60)
+            parts.append(f'<div class="card ok"><b>{who}</b> arrived safely at {escape(j.destination)} ({ago} min ago)</div>')
+
+    extras = []
+    tg = alerts_mod.telegram
+    if tg and tg.username:
+        if c.telegram_chat_id:
+            extras.append('<div class="card ok">&#10003; Alerts on Telegram are connected.</div>')
+        else:
+            extras.append('<div class="card"><b>Get alerts on your phone</b>'
+                          '<p>Connect Telegram so you are notified instantly, even when this page is closed.</p>'
+                          f'<a href="https://t.me/{escape(tg.username)}?start={escape(token)}">'
+                          '<button class="yes" type="button">Connect Telegram</button></a></div>')
+
+    body = ("".join(parts) or f"<p>{who} has no active journey right now. You're all set.</p>") + "".join(extras)
     return _page(f"<h2>SafeSphere</h2>{body}<p style='color:#777;font-size:13px'>This page refreshes every 30 seconds.</p>", refresh=True)
 
 

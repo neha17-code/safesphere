@@ -61,7 +61,12 @@ class Contact(Base):
     priority: Mapped[int] = mapped_column(Integer, default=1)  # 1 = alerted first, 2 = escalation
     consent: Mapped[str] = mapped_column(String(12), default=Consent.PENDING.value)
     view_token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    @property
+    def telegram_connected(self) -> bool:      # exposed to the app; the chat id itself never is
+        return bool(self.telegram_chat_id)
 
     owner = relationship("User", back_populates="contacts")
     journeys = relationship("Journey", secondary=journey_contacts, back_populates="contacts")

@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api_client.dart';
+import '../../services/contact_service.dart';
 import '../../services/journey_service.dart';
+import '../../services/location_service.dart';
 
 class EmergencyScreen extends StatefulWidget {
   final int? journeyId; // set when opened from an active journey
@@ -16,12 +18,18 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
   bool _busy = false;
   int? _delivered; // null = not sent yet
 
+  void _toast(String m) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  }
+
   Future<void> _send() async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         title: const Text('Send emergency alert?'),
-        content: const Text('All your confirmed trusted contacts will get an SMS with your location.'),
+        content: const Text('Your trusted contacts who accepted will be alerted with your location.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('CANCEL')),
           ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('SEND ALERT')),
@@ -35,10 +43,33 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
       final n = await JourneyService().emergency(journeyId: widget.journeyId);
       if (mounted) setState(() => _delivered = n);
     } on ApiException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Alert NOT sent: ${e.message}')));
+      _toast('Alert NOT sent: ${e.message}. Use "SMS from my phone" below.');
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Works with no internet and no SMS provider: opens the phone's own SMS app,
+  /// addressed to every saved contact, with the location link filled in. One tap to send.
+  Future<void> _smsFromPhone() async {
+    try {
+      final contacts = await ContactService().getContacts(); // saved copy when offline
+      if (contacts.isEmpty) return _toast('Add a trusted contact first.');
+
+      final pos = await LocationService.current();
+      final loc = pos == null ? '' : ' My location: https://maps.google.com/?q=${pos.latitude},${pos.longitude}';
+      final body = 'EMERGENCY: I need help right now.$loc';
+      final numbers = contacts.map((c) => c.phone).join(',');
+
+      var opened = false;
+      try {
+        opened = await launchUrl(Uri.parse('sms:$numbers?body=${Uri.encodeComponent(body)}'));
+      } catch (_) {
+        opened = false;
+      }
+      if (!opened) _toast('Could not open the SMS app.');
+    } on ApiException catch (e) {
+      _toast(e.message);
     }
   }
 
@@ -49,7 +80,18 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Emergency')),
       body: SafeArea(
-        child: Padding(padding: const EdgeInsets.all(20), child: _delivered == null ? _ready() : _result()),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          // scroll-safe: large system fonts / small screens can never overflow
+          child: LayoutBuilder(
+            builder: (context, c) => SingleChildScrollView(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: c.maxHeight),
+                child: IntrinsicHeight(child: _delivered == null ? _ready() : _result()),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -65,6 +107,16 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
         ),
       );
 
+  Widget _smsButton() => SizedBox(
+        width: double.infinity,
+        height: 52,
+        child: OutlinedButton.icon(
+          onPressed: _smsFromPhone,
+          icon: const Icon(Icons.sms_outlined),
+          label: const Text('SMS FROM MY PHONE', style: TextStyle(fontWeight: FontWeight.bold)),
+        ),
+      );
+
   Widget _ready() => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -72,8 +124,9 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
           const Text('I need help right now', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           const Text(
-            'SafeSphere will SMS your confirmed trusted contacts with your live location. '
-            'It does not contact the police, so call 112 if you are in danger.',
+            'SafeSphere alerts your trusted contacts who accepted, with your live location. '
+            'It does not contact the police, so call 112 if you are in danger. '
+            '"SMS from my phone" works even without internet.',
             style: TextStyle(fontSize: 15),
           ),
           const Spacer(),
@@ -90,6 +143,8 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                   : const Text('ALERT MY CONTACTS', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             ),
           ),
+          const SizedBox(height: 12),
+          _smsButton(),
         ],
       );
 
@@ -109,12 +164,14 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
         Text(
           reached
               ? 'Stay somewhere safe if you can. Call 112 if you are in immediate danger.'
-              : 'You have no contacts who accepted their invitation. Call 112 now.',
+              : 'SafeSphere could not deliver the alert. Send an SMS from your phone below and call 112 if you are in danger.',
           style: const TextStyle(fontSize: 16),
           textAlign: TextAlign.center,
         ),
         const SizedBox(height: 32),
         _callButton(),
+        const SizedBox(height: 12),
+        _smsButton(),
         const SizedBox(height: 12),
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('BACK')),
       ],

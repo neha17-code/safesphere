@@ -53,8 +53,10 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen> {
     super.dispose();
   }
 
-  void _toast(String msg) =>
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  void _toast(String msg) {
+    if (!mounted) return; // screen may be closed by the time a slow request fails
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
 
   Future<void> _sync() async {
     try {
@@ -69,6 +71,7 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen> {
     return showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         title: const Text('Enter your safety PIN'),
         content: TextField(
           controller: c,
@@ -76,7 +79,7 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen> {
           obscureText: true,
           keyboardType: TextInputType.number,
           maxLength: 6,
-          decoration: const InputDecoration(border: OutlineInputBorder()),
+          decoration: const InputDecoration(border: OutlineInputBorder(), counterText: ''),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCEL')),
@@ -116,12 +119,22 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen> {
     }
   }
 
-  Future<void> _extend() async {
+  Future<void> _runningLate() async {
+    final minutes = await showModalBottomSheet<int>(
+      context: context,
+      isScrollControlled: true, // lets the sheet rise above the keyboard
+      builder: (_) => _LateSheet(currentEta: _journey.expectedArrival),
+    );
+    if (minutes != null) await _extendBy(minutes);
+  }
+
+  Future<void> _extendBy(int minutes) async {
     try {
-      final j = await _service.extend(_journey.id, 15);
+      final j = await _service.extend(_journey.id, minutes);
       await NotificationService.scheduleArrivalReminder(j.expectedArrival);
-      if (mounted) setState(() => _journey = j);
-      _toast('Arrival time extended by 15 minutes.');
+      if (!mounted) return;
+      setState(() => _journey = j);
+      _toast('New expected arrival: ${TimeOfDay.fromDateTime(j.expectedArrival).format(context)}');
     } on ApiException catch (e) {
       _toast(e.message);
     }
@@ -193,9 +206,9 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen> {
           width: double.infinity,
           height: 48,
           child: OutlinedButton.icon(
-            onPressed: _extend,
+            onPressed: _runningLate,
             icon: const Icon(Icons.more_time),
-            label: const Text('RUNNING LATE (+15 MIN)'),
+            label: const Text('RUNNING LATE'),
           ),
         ),
         const SizedBox(height: 12),
@@ -259,6 +272,126 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+
+/// Bottom sheet: presets, custom minutes, or a new arrival time. Pops the extra minutes.
+class _LateSheet extends StatefulWidget {
+  final DateTime currentEta;
+  const _LateSheet({required this.currentEta});
+
+  @override
+  State<_LateSheet> createState() => _LateSheetState();
+}
+
+class _LateSheetState extends State<_LateSheet> {
+  static const _presets = [15, 30, 45, 60, 120, 180];
+  static const _maxMinutes = 720; // 12 h per extension (server also caps at 48 h from now)
+
+  final _custom = TextEditingController();
+  String? _error;
+
+  @override
+  void dispose() {
+    _custom.dispose();
+    super.dispose();
+  }
+
+  String _label(int m) {
+    if (m < 60) return '+$m min';
+    return m % 60 == 0 ? '+${m ~/ 60} h' : '+${m ~/ 60} h ${m % 60} min';
+  }
+
+  void _submitCustom() {
+    final m = int.tryParse(_custom.text.trim());
+    if (m == null || m < 5 || m > _maxMinutes) {
+      setState(() => _error = 'Enter between 5 and $_maxMinutes minutes.');
+      return;
+    }
+    Navigator.pop(context, m);
+  }
+
+  Future<void> _pickTime() async {
+    final eta = widget.currentEta;
+    final t = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(eta.add(const Duration(minutes: 30))),
+    );
+    if (t == null || !mounted) return;
+
+    var candidate = DateTime(eta.year, eta.month, eta.day, t.hour, t.minute);
+    if (!candidate.isAfter(eta)) candidate = candidate.add(const Duration(days: 1)); // past midnight
+    final m = candidate.difference(eta).inMinutes;
+    if (m < 5 || m > _maxMinutes) {
+      setState(() => _error = 'Choose a time between 5 minutes and 12 hours after your current arrival time.');
+      return;
+    }
+    Navigator.pop(context, m);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + MediaQuery.of(context).viewInsets.bottom),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('How much more time do you need?',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              Text('Current arrival: ${TimeOfDay.fromDateTime(widget.currentEta).format(context)}',
+                  style: const TextStyle(color: Colors.black54)),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: _presets
+                    .map((m) => ActionChip(label: Text(_label(m)), onPressed: () => Navigator.pop(context, m)))
+                    .toList(),
+              ),
+              const SizedBox(height: 20),
+              const Text('Or enter your own', style: TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _custom,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        hintText: 'Extra minutes, e.g. 25',
+                        border: OutlineInputBorder(),
+                      ),
+                      onSubmitted: (_) => _submitCustom(),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  FilledButton(onPressed: _submitCustom, child: const Text('ADD')),
+                ],
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _pickTime,
+                  icon: const Icon(Icons.access_time),
+                  label: const Text('PICK A NEW ARRIVAL TIME'),
+                ),
+              ),
+              if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: Text(_error!, style: const TextStyle(color: Colors.red)),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }

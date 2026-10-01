@@ -8,6 +8,7 @@ from datetime import timedelta
 
 os.environ["DATABASE_URL"] = "sqlite:///./test_safesphere.db"
 os.environ["SCHEDULER_ENABLED"] = "false"
+os.environ["TELEGRAM_WEBHOOK_SECRET"] = "test-secret"
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,6 +17,7 @@ from app.database import Base, SessionLocal, engine
 from app.main import app
 from app.models import Contact, Journey, utcnow
 from app import scheduler
+from app.routers import auth as auth_router
 from app.notifier import ConsoleNotifier
 import app.alerts as alerts_mod
 import app.scheduler as scheduler_mod
@@ -31,6 +33,8 @@ def client():
     Base.metadata.drop_all(engine); Base.metadata.create_all(engine)
     box = Outbox()
     alerts_mod.notifier = box; scheduler_mod.notifier = box
+    alerts_mod.telegram = None
+    auth_router._limiter.reset()      # each test starts with a fresh login/register allowance
     with TestClient(app) as c:
         c.outbox = box
         yield c
@@ -138,3 +142,70 @@ def test_whatsapp_invite_link(client):
     token = body["link"].rsplit("/", 1)[1]
     client.post(f"/c/{token}/confirm", follow_redirects=False)
     assert client.get(f"/contacts/{cid}/invite", headers=h).status_code == 409
+
+
+def test_running_late_is_flexible_but_bounded(client):
+    h = register(client); cid, _ = confirmed_contact(client, h); jid = start(client, h, cid, minutes=30)
+    url = f"/journeys/{jid}/extend"
+    assert client.post(url, headers=h, json={"minutes": 180}).status_code == 200   # any custom amount
+    assert client.post(url, headers=h, json={"minutes": 4}).status_code == 422     # too small
+    assert client.post(url, headers=h, json={"minutes": 721}).status_code == 422   # over 12 h at once
+    for _ in range(3):                                                             # 210 -> 2370 min
+        assert client.post(url, headers=h, json={"minutes": 720}).status_code == 200
+    assert client.post(url, headers=h, json={"minutes": 720}).status_code == 422   # would pass 48 h
+
+
+class FakeTelegram:
+    username = "SafeSphereBot"
+
+    def __init__(self):
+        self.sent = []
+
+    def send_message(self, chat_id, text):
+        self.sent.append((str(chat_id), text))
+        return True
+
+
+def link_telegram(c, token, chat_id=555, secret="test-secret"):
+    return c.post("/telegram/webhook", headers={"X-Telegram-Bot-Api-Secret-Token": secret},
+                  json={"message": {"chat": {"id": chat_id}, "text": f"/start {token}"}})
+
+
+def test_telegram_link_then_alerts_use_telegram(client):
+    tg = FakeTelegram(); alerts_mod.telegram = tg
+    h = register(client); cid, token = confirmed_contact(client, h)
+    assert link_telegram(client, token).status_code == 200
+    assert any("Connected" in t for _, t in tg.sent)
+    client.outbox.sent.clear(); tg.sent.clear()
+    start(client, h, cid)
+    assert any(chat == "555" and "started a journey" in t for chat, t in tg.sent)
+    assert not any("started a journey" in b for _, b in client.outbox.sent)     # no duplicate SMS
+    assert client.get("/contacts", headers=h).json()[0]["telegram_connected"] is True
+    assert "Telegram are connected" in client.get(f"/c/{token}").text
+
+
+def test_telegram_webhook_rejects_wrong_secret(client):
+    alerts_mod.telegram = FakeTelegram()
+    assert client.post("/telegram/webhook", json={}, headers={"X-Telegram-Bot-Api-Secret-Token": "nope"}).status_code == 403
+
+
+def test_unconfirmed_contact_cannot_connect_telegram(client):
+    alerts_mod.telegram = FakeTelegram()
+    h = register(client)
+    cid = client.post("/contacts", json={"name": "Mom", "phone": "+919000000001"}, headers=h).json()["id"]
+    with SessionLocal() as db:
+        token = db.get(Contact, cid).view_token
+    link_telegram(client, token)
+    assert client.get("/contacts", headers=h).json()[0]["telegram_connected"] is False
+
+
+def test_no_provider_means_not_reported_as_delivered(client):
+    h = register(client); confirmed_contact(client, h)
+    alerts_mod.notifier = ConsoleNotifier()      # the real console notifier: logs only
+    assert client.post("/alerts/emergency", headers=h, json={}).json()["delivered_to"] == 0
+
+
+def test_arrived_safely_is_shown_to_the_contact(client):
+    h = register(client); cid, token = confirmed_contact(client, h); jid = start(client, h, cid)
+    client.post(f"/journeys/{jid}/arrive", headers=h, json={})
+    assert "arrived safely" in client.get(f"/c/{token}").text

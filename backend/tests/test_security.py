@@ -43,6 +43,13 @@ class Limiter(unittest.TestCase):
         self.assertEqual([rl.allow("k") for _ in range(4)], [True, True, True, False])
         self.assertTrue(rl.allow("other"))
 
+    def test_reset_clears_the_window(self):
+        rl = RateLimiter(1, 60)
+        self.assertTrue(rl.allow("k"))
+        self.assertFalse(rl.allow("k"))
+        rl.reset()
+        self.assertTrue(rl.allow("k"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -86,6 +86,7 @@ class ContactOut(BaseModel):
     relationship_label: str | None
     priority: int
     consent: str
+    telegram_connected: bool = False
 
 
 class InviteOut(BaseModel):
@@ -107,7 +108,7 @@ class ArriveIn(BaseModel):
 
 
 class ExtendIn(BaseModel):
-    minutes: int = Field(ge=5, le=120)
+    minutes: int = Field(ge=5, le=720)  # up to 12 h per extension
 
 
 class LocationIn(BaseModel):

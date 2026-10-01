@@ -57,6 +57,10 @@ class RateLimiter:
         self.limit, self.window = limit, window_seconds
         self._hits: dict[str, deque] = defaultdict(deque)
 
+    def reset(self) -> None:
+        """Forget all hits (used by the test suite so tests don't throttle each other)."""
+        self._hits.clear()
+
     def allow(self, key: str) -> bool:
         now = time.monotonic()
         q = self._hits[key]

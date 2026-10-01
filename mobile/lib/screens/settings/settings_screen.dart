@@ -25,7 +25,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }).catchError((_) {});
   }
 
-  void _toast(String m) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  void _toast(String m) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  }
 
   Future<void> _setPins() async {
     final safe = TextEditingController();
@@ -34,31 +37,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Set safety PINs'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'Safe PIN: confirms arrival normally.\n'
-              'Duress PIN: looks identical on screen but silently alerts your contacts. '
-              'Use it if someone forces you to confirm.',
-              style: TextStyle(fontSize: 13),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: safe,
-              obscureText: true,
-              keyboardType: TextInputType.number,
-              maxLength: 6,
-              decoration: const InputDecoration(labelText: 'Safe PIN (4-6 digits)'),
-            ),
-            TextField(
-              controller: duress,
-              obscureText: true,
-              keyboardType: TextInputType.number,
-              maxLength: 6,
-              decoration: const InputDecoration(labelText: 'Duress PIN (different)'),
-            ),
-          ],
+        // Scrollable so the keyboard / large fonts can never overflow the dialog.
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Safe PIN: confirms arrival normally.\n'
+                'Duress PIN: looks identical on screen but silently alerts your contacts. '
+                'Use it if someone forces you to confirm.',
+                style: TextStyle(fontSize: 13),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: safe,
+                obscureText: true,
+                keyboardType: TextInputType.number,
+                maxLength: 6,
+                decoration: const InputDecoration(labelText: 'Safe PIN (4-6 digits)', counterText: ''),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: duress,
+                obscureText: true,
+                keyboardType: TextInputType.number,
+                maxLength: 6,
+                decoration: const InputDecoration(labelText: 'Duress PIN (different)', counterText: ''),
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('CANCEL')),

@@ -35,8 +35,10 @@ class _JourneySetupScreenState extends State<JourneySetupScreen> {
     super.dispose();
   }
 
-  void _toast(String msg) =>
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  void _toast(String msg) {
+    if (!mounted) return; // screen may be closed by the time a slow request fails
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
 
   Future<void> _loadContacts() async {
     try {

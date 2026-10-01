@@ -116,7 +116,10 @@ def extend(journey_id: int, body: ExtendIn, user: User = Depends(current_user), 
     j = _owned(db, user, journey_id)
     if j.status != JourneyStatus.ACTIVE.value:
         raise HTTPException(409, "Journey is not active")
-    j.expected_arrival_at += timedelta(minutes=body.minutes)
+    new_eta = j.expected_arrival_at + timedelta(minutes=body.minutes)
+    if new_eta > utcnow() + timedelta(hours=48):
+        raise HTTPException(422, "Arrival time can be at most 48 hours from now")
+    j.expected_arrival_at = new_eta
     if j.escalation_stage >= Stage.CONTACTS_ALERTED:
         send_to_contacts(db, user, j.contacts,
                          f"Update: {user.name} is OK but delayed. New arrival in about "
