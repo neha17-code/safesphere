@@ -1,5 +1,7 @@
+import io
 import json
 import unittest
+import urllib.error
 from types import SimpleNamespace
 from unittest import mock
 
@@ -50,6 +52,16 @@ class Fast2Sms(unittest.TestCase):
         with mock.patch("app.notifier.settings", CFG), \
              mock.patch("urllib.request.urlopen", side_effect=OSError("down")):
             self.assertFalse(Fast2SmsNotifier().send_sms("+919876543210", "x"))
+
+    def test_http_error_logs_status_and_providers_reason_but_never_the_key(self):
+        err = urllib.error.HTTPError("https://x", 412, "bad", {}, io.BytesIO(b'{"message":"Invalid Authentication"}'))
+        with mock.patch("app.notifier.settings", CFG), mock.patch("urllib.request.urlopen", side_effect=err):
+            with self.assertLogs("safesphere.notifier", level="ERROR") as logs:
+                self.assertFalse(Fast2SmsNotifier().send_sms("+919876543210", "x"))
+        text = "\n".join(logs.output)
+        self.assertIn("412", text)
+        self.assertIn("Invalid Authentication", text)
+        self.assertNotIn("KEY", text)
 
     def test_foreign_number_is_skipped_without_a_request(self):
         with mock.patch("app.notifier.settings", CFG), mock.patch("urllib.request.urlopen") as opened:

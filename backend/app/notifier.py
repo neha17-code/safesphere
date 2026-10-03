@@ -9,6 +9,7 @@ Delivery channels behind small interfaces (stdlib only, no SDKs).
 import base64
 import json
 import logging
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -46,7 +47,18 @@ class Fast2SmsNotifier:
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read() or b"{}")
-                return 200 <= resp.status < 300 and data.get("return") is True
+                ok = 200 <= resp.status < 300 and data.get("return") is True
+                if not ok:
+                    log.error("Fast2SMS did not accept the message: %s", str(data.get("message"))[:300])
+                return ok
+        except urllib.error.HTTPError as exc:
+            # Fast2SMS explains the refusal in the response body (bad key, wallet balance, number...).
+            try:
+                reason = exc.read().decode("utf-8", "replace")[:300]
+            except Exception:
+                reason = ""
+            log.error("Fast2SMS rejected the request: HTTP %s %s", exc.code, reason)
+            return False
         except Exception as exc:  # provider errors must never crash the scheduler
             log.error("Fast2SMS send failed: %s", type(exc).__name__)
             return False
