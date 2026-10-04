@@ -8,7 +8,6 @@ from datetime import timedelta
 
 os.environ["DATABASE_URL"] = "sqlite:///./test_safesphere.db"
 os.environ["SCHEDULER_ENABLED"] = "false"
-os.environ["TELEGRAM_WEBHOOK_SECRET"] = "test-secret"
 
 import pytest
 from fastapi.testclient import TestClient
@@ -33,7 +32,7 @@ def client():
     Base.metadata.drop_all(engine); Base.metadata.create_all(engine)
     box = Outbox()
     alerts_mod.notifier = box; scheduler_mod.notifier = box
-    alerts_mod.telegram = None
+    alerts_mod.emailer = None
     auth_router._limiter.reset()      # each test starts with a fresh login/register allowance
     with TestClient(app) as c:
         c.outbox = box
@@ -46,8 +45,11 @@ def register(c, email="neha@example.com"):
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
 
-def confirmed_contact(c, h, phone="+919000000001"):
-    cid = c.post("/contacts", json={"name": "Mom", "phone": phone}, headers=h).json()["id"]
+def confirmed_contact(c, h, phone="+919000000001", email=None):
+    payload = {"name": "Mom", "phone": phone}
+    if email:
+        payload["email"] = email
+    cid = c.post("/contacts", json=payload, headers=h).json()["id"]
     with SessionLocal() as db:
         token = db.get(Contact, cid).view_token
     assert c.post(f"/c/{token}/confirm", follow_redirects=False).status_code == 303
@@ -155,50 +157,6 @@ def test_running_late_is_flexible_but_bounded(client):
     assert client.post(url, headers=h, json={"minutes": 720}).status_code == 422   # would pass 48 h
 
 
-class FakeTelegram:
-    username = "SafeSphereBot"
-
-    def __init__(self):
-        self.sent = []
-
-    def send_message(self, chat_id, text):
-        self.sent.append((str(chat_id), text))
-        return True
-
-
-def link_telegram(c, token, chat_id=555, secret="test-secret"):
-    return c.post("/telegram/webhook", headers={"X-Telegram-Bot-Api-Secret-Token": secret},
-                  json={"message": {"chat": {"id": chat_id}, "text": f"/start {token}"}})
-
-
-def test_telegram_link_then_alerts_use_telegram(client):
-    tg = FakeTelegram(); alerts_mod.telegram = tg
-    h = register(client); cid, token = confirmed_contact(client, h)
-    assert link_telegram(client, token).status_code == 200
-    assert any("Connected" in t for _, t in tg.sent)
-    client.outbox.sent.clear(); tg.sent.clear()
-    start(client, h, cid)
-    assert any(chat == "555" and "started a journey" in t for chat, t in tg.sent)
-    assert not any("started a journey" in b for _, b in client.outbox.sent)     # no duplicate SMS
-    assert client.get("/contacts", headers=h).json()[0]["telegram_connected"] is True
-    assert "Telegram are connected" in client.get(f"/c/{token}").text
-
-
-def test_telegram_webhook_rejects_wrong_secret(client):
-    alerts_mod.telegram = FakeTelegram()
-    assert client.post("/telegram/webhook", json={}, headers={"X-Telegram-Bot-Api-Secret-Token": "nope"}).status_code == 403
-
-
-def test_unconfirmed_contact_cannot_connect_telegram(client):
-    alerts_mod.telegram = FakeTelegram()
-    h = register(client)
-    cid = client.post("/contacts", json={"name": "Mom", "phone": "+919000000001"}, headers=h).json()["id"]
-    with SessionLocal() as db:
-        token = db.get(Contact, cid).view_token
-    link_telegram(client, token)
-    assert client.get("/contacts", headers=h).json()[0]["telegram_connected"] is False
-
-
 def test_no_provider_means_not_reported_as_delivered(client):
     h = register(client); confirmed_contact(client, h)
     alerts_mod.notifier = ConsoleNotifier()      # the real console notifier: logs only
@@ -209,3 +167,51 @@ def test_arrived_safely_is_shown_to_the_contact(client):
     h = register(client); cid, token = confirmed_contact(client, h); jid = start(client, h, cid)
     client.post(f"/journeys/{jid}/arrive", headers=h, json={})
     assert "arrived safely" in client.get(f"/c/{token}").text
+
+
+class FakeEmail:
+    def __init__(self):
+        self.sent = []
+
+    def send_email(self, to, subject, body):
+        self.sent.append((to, subject, body))
+        return True
+
+
+def test_invitation_is_emailed_when_contact_has_an_email(client):
+    mail = FakeEmail(); alerts_mod.emailer = mail
+    h = register(client)
+    client.post("/contacts", json={"name": "Mom", "phone": "+919000000001", "email": "mom@example.com"}, headers=h)
+    assert mail.sent and mail.sent[0][0] == "mom@example.com"
+    assert "/c/" in mail.sent[0][2]
+
+
+def test_email_is_the_fallback_when_sms_cannot_be_delivered(client):
+    mail = FakeEmail(); alerts_mod.emailer = mail
+    h = register(client); confirmed_contact(client, h, email="mom@example.com")
+    alerts_mod.notifier = ConsoleNotifier()          # no SMS provider / refused
+    mail.sent.clear()
+    assert client.post("/alerts/emergency", headers=h, json={}).json()["delivered_to"] == 1
+    assert mail.sent[0][0] == "mom@example.com"
+    assert mail.sent[0][1].startswith("SafeSphere: EMERGENCY")
+
+
+def test_sms_is_preferred_over_email_when_it_works(client):
+    mail = FakeEmail(); alerts_mod.emailer = mail
+    h = register(client); cid, _ = confirmed_contact(client, h, email="mom@example.com")
+    mail.sent.clear(); client.outbox.sent.clear()
+    start(client, h, cid)
+    assert any("started a journey" in b for _, b in client.outbox.sent)
+    assert not any("started a journey" in b for _, _, b in mail.sent)
+
+
+def test_email_can_be_added_later_with_authorization(client):
+    mail = FakeEmail(); alerts_mod.emailer = mail
+    h = register(client)
+    cid = client.post("/contacts", json={"name": "Mom", "phone": "+919000000001"}, headers=h).json()["id"]
+    assert client.put(f"/contacts/{cid}/email", json={"email": "Mom@Example.com"}, headers=h).status_code == 204
+    assert client.get("/contacts", headers=h).json()[0]["email"] == "mom@example.com"
+    assert any(to == "mom@example.com" for to, _, _ in mail.sent)        # pending contact gets the invitation
+    other = register(client, "eve@example.com")
+    assert client.put(f"/contacts/{cid}/email", json={"email": "x@example.com"}, headers=other).status_code == 404
+    assert client.put(f"/contacts/{cid}/email", json={"email": "not-an-email"}, headers=h).status_code == 422

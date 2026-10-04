@@ -2,9 +2,14 @@
 create_all() only creates MISSING TABLES, never missing columns. Use Alembic for anything bigger."""
 from sqlalchemy import inspect, text
 
+NEW_CONTACT_COLUMNS = {
+    "email": "VARCHAR(254)",
+}
+
 
 def ensure_columns(engine) -> None:
-    cols = {c["name"] for c in inspect(engine).get_columns("contacts")}
-    if "telegram_chat_id" not in cols:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE contacts ADD COLUMN telegram_chat_id VARCHAR(32)"))
+    have = {c["name"] for c in inspect(engine).get_columns("contacts")}
+    with engine.begin() as conn:
+        for name, ddl in NEW_CONTACT_COLUMNS.items():
+            if name not in have:
+                conn.execute(text(f"ALTER TABLE contacts ADD COLUMN {name} {ddl}"))

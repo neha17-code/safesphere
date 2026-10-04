@@ -17,6 +17,7 @@ class _TrustedContactsScreenState extends State<TrustedContactsScreen> {
   final _service = ContactService();
   final _name = TextEditingController();
   final _phone = TextEditingController();
+  final _email = TextEditingController();
   List<Contact> _contacts = [];
   int _priority = 1;
   bool _loading = true;
@@ -31,6 +32,7 @@ class _TrustedContactsScreenState extends State<TrustedContactsScreen> {
   void dispose() {
     _name.dispose();
     _phone.dispose();
+    _email.dispose();
     super.dispose();
   }
 
@@ -63,10 +65,12 @@ class _TrustedContactsScreenState extends State<TrustedContactsScreen> {
       final contact = await _service.addContact(
         name: _name.text.trim(),
         phone: _phone.text.trim(),
+        email: _email.text.trim(),
         priority: _priority,
       );
       _name.clear();
       _phone.clear();
+      _email.clear();
       await _load();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -108,6 +112,35 @@ class _TrustedContactsScreenState extends State<TrustedContactsScreen> {
   Future<void> _remove(Contact c) async {
     try {
       await _service.removeContact(c.id);
+      await _load();
+    } on ApiException catch (e) {
+      _toast(e.message);
+    }
+  }
+
+  Future<void> _setEmail(Contact c) async {
+    final controller = TextEditingController();
+    final email = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        scrollable: true,
+        title: Text('Email for ${c.name}'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          keyboardType: TextInputType.emailAddress,
+          decoration: const InputDecoration(hintText: 'name@example.com', border: OutlineInputBorder()),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCEL')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, controller.text.trim()), child: const Text('SAVE')),
+        ],
+      ),
+    );
+    if (email == null || email.isEmpty) return;
+    try {
+      await _service.setEmail(c.id, email);
+      _toast('Email saved for ${c.name}.');
       await _load();
     } on ApiException catch (e) {
       _toast(e.message);
@@ -158,6 +191,15 @@ class _TrustedContactsScreenState extends State<TrustedContactsScreen> {
                     decoration: const InputDecoration(
                         hintText: 'Phone, e.g. +919876543210',
                         prefixIcon: Icon(Icons.phone_outlined),
+                        border: OutlineInputBorder()),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: _email,
+                    keyboardType: TextInputType.emailAddress,
+                    decoration: const InputDecoration(
+                        hintText: 'Email for alerts (recommended)',
+                        prefixIcon: Icon(Icons.mail_outline),
                         border: OutlineInputBorder()),
                   ),
                   const SizedBox(height: 10),
@@ -215,7 +257,7 @@ class _TrustedContactsScreenState extends State<TrustedContactsScreen> {
       isThreeLine: c.isConfirmed,
       subtitle: Text(
         '${c.phone} · ${c.priority == 1 ? "alerted first" : "escalation"}'
-        '${c.isConfirmed ? (c.telegramConnected ? "\nAlerts: Telegram connected" : "\nNot on Telegram yet: ask them to tap Connect Telegram on their page") : ""}',
+        '${c.isConfirmed ? (c.email != null ? "\nAlerts by email: ${c.email}" : "\nNo email yet: tap the mail icon to add one") : ""}',
       ),
       leading: Icon(Icons.circle, size: 14, color: _chipColor(c.consent)),
       trailing: Row(
@@ -226,6 +268,12 @@ class _TrustedContactsScreenState extends State<TrustedContactsScreen> {
               icon: const Icon(Icons.chat_outlined, color: Colors.green),
               tooltip: 'Send invitation on WhatsApp (${c.consent.toLowerCase()})',
               onPressed: () => _inviteViaWhatsApp(c),
+            ),
+          if (c.email == null)
+            IconButton(
+              icon: const Icon(Icons.mail_outline),
+              tooltip: 'Add email for alerts',
+              onPressed: () => _setEmail(c),
             ),
           IconButton(icon: const Icon(Icons.delete_outline), onPressed: () => _remove(c)),
         ],

@@ -76,6 +76,7 @@ class ContactIn(BaseModel):
     phone: Phone
     relationship_label: str | None = Field(default=None, max_length=40)
     priority: int = Field(default=1, ge=1, le=2)
+    email: EmailStr | None = None
 
 
 class ContactOut(BaseModel):
@@ -86,7 +87,11 @@ class ContactOut(BaseModel):
     relationship_label: str | None
     priority: int
     consent: str
-    telegram_connected: bool = False
+    email: str | None = None
+
+
+class ContactEmailIn(BaseModel):
+    email: EmailStr
 
 
 class InviteOut(BaseModel):

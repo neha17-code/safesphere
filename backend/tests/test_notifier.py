@@ -5,9 +5,10 @@ import urllib.error
 from types import SimpleNamespace
 from unittest import mock
 
-from app.notifier import Fast2SmsNotifier, indian_mobile
+from app.notifier import BrevoEmail, Fast2SmsNotifier, indian_mobile
 
 CFG = SimpleNamespace(fast2sms_api_key="KEY")
+MAIL_CFG = SimpleNamespace(brevo_api_key="BKEY", email_from="alerts@example.com", email_from_name="SafeSphere")
 
 
 class FakeResp:
@@ -67,6 +68,36 @@ class Fast2Sms(unittest.TestCase):
         with mock.patch("app.notifier.settings", CFG), mock.patch("urllib.request.urlopen") as opened:
             self.assertFalse(Fast2SmsNotifier().send_sms("+14155550123", "x"))
         opened.assert_not_called()
+
+
+class Brevo(unittest.TestCase):
+    def test_request_shape(self):
+        with mock.patch("app.notifier.settings", MAIL_CFG), \
+             mock.patch("urllib.request.urlopen", return_value=FakeResp(201, b'{"messageId": "x"}')) as opened:
+            self.assertTrue(BrevoEmail().send_email("mom@example.com", "Subj", "Body"))
+        req = opened.call_args[0][0]
+        self.assertEqual(req.full_url, "https://api.brevo.com/v3/smtp/email")
+        self.assertEqual(req.get_header("Api-key"), "BKEY")
+        self.assertEqual(json.loads(req.data), {
+            "sender": {"name": "SafeSphere", "email": "alerts@example.com"},
+            "to": [{"email": "mom@example.com"}],
+            "subject": "Subj",
+            "textContent": "Body",
+        })
+
+    def test_http_error_logs_reason_but_never_the_key(self):
+        err = urllib.error.HTTPError("https://x", 401, "no", {}, io.BytesIO(b'{"message":"Key not found"}'))
+        with mock.patch("app.notifier.settings", MAIL_CFG), mock.patch("urllib.request.urlopen", side_effect=err):
+            with self.assertLogs("safesphere.notifier", level="ERROR") as logs:
+                self.assertFalse(BrevoEmail().send_email("mom@example.com", "S", "B"))
+        text = "\n".join(logs.output)
+        self.assertIn("401", text)
+        self.assertIn("Key not found", text)
+        self.assertNotIn("BKEY", text)
+
+    def test_network_error_is_not_delivery_and_does_not_raise(self):
+        with mock.patch("app.notifier.settings", MAIL_CFG), mock.patch("urllib.request.urlopen", side_effect=OSError("down")):
+            self.assertFalse(BrevoEmail().send_email("mom@example.com", "S", "B"))
 
 
 if __name__ == "__main__":

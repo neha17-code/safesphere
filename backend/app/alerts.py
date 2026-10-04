@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .models import Consent, Contact, Event, Journey, User
-from .notifier import notifier, telegram   # module globals: tests swap them for fakes
+from .notifier import emailer, notifier   # module globals: tests swap them for fakes
 
 
 def link_for(contact: Contact) -> str:
@@ -21,12 +21,21 @@ def maps_link(lat: float | None, lng: float | None) -> str:
     return f"https://maps.google.com/?q={lat},{lng}" if lat is not None and lng is not None else ""
 
 
+FOOTER = "\n\nYou received this because someone added you as a trusted contact on SafeSphere."
+
+
+def _subject(text: str) -> str:
+    lines = text.strip().splitlines()
+    first = lines[0] if lines else "Alert"
+    return "SafeSphere: " + (first if len(first) <= 85 else first[:85] + "...")
+
+
 def _deliver(contact: Contact, text: str) -> tuple[bool, str]:
-    """Fallback chain: Telegram (if the contact connected it), then SMS. True only if a channel accepted it."""
-    if telegram and contact.telegram_chat_id and telegram.send_message(contact.telegram_chat_id, text):
-        return True, "telegram"
+    """Fallback chain: SMS first, then email. True only if a channel actually accepted the message."""
     if notifier.send_sms(contact.phone, text):
         return True, "sms"
+    if emailer and contact.email and emailer.send_email(contact.email, _subject(text), text + FOOTER):
+        return True, "email"
     return False, "none"
 
 
@@ -48,9 +57,9 @@ def send_to_contacts(db: Session, owner: User, contacts: list[Contact], text: st
 
 
 def send_consent_request(db: Session, owner: User, contact: Contact) -> None:
-    notifier.send_sms(
-        contact.phone,
-        f"{owner.name} added you as a trusted contact on SafeSphere. "
-        f"You'll only be alerted if they may need help. Review & accept: {link_for(contact)}",
-    )
+    text = (f"{owner.name} added you as a trusted contact on SafeSphere. "
+            f"You'll only be alerted if they may need help. Review & accept: {link_for(contact)}")
+    notifier.send_sms(contact.phone, text)
+    if emailer and contact.email:
+        emailer.send_email(contact.email, f"SafeSphere: {owner.name} added you as a trusted contact", text)
     log_event(db, owner.id, "CONSENT_REQUESTED", f"to {contact.name}")

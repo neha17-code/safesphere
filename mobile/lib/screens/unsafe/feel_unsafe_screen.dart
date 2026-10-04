@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/api_client.dart';
+import '../../core/scroll_fill.dart';
 import '../../models/contact.dart';
 import '../../services/contact_service.dart';
 import '../../services/journey_service.dart';
@@ -72,7 +73,7 @@ class _FeelUnsafeScreenState extends State<FeelUnsafeScreen> {
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(20),
-          child: Column(
+          child: ScrollFill(child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text('Get support quietly', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
@@ -116,7 +117,7 @@ class _FeelUnsafeScreenState extends State<FeelUnsafeScreen> {
                 ),
               ),
             ],
-          ),
+          )),
         ),
       ),
     );

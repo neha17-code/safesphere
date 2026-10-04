@@ -9,7 +9,6 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import alerts as alerts_mod
 from ..alerts import log_event, maps_link
 from ..database import get_db
 from ..models import Consent, Contact, Event, JourneyStatus, LocationPoint, User, utcnow
@@ -83,18 +82,7 @@ def view(token: str, db: Session = Depends(get_db)):
             ago = int((now - j.completed_at).total_seconds() // 60)
             parts.append(f'<div class="card ok"><b>{who}</b> arrived safely at {escape(j.destination)} ({ago} min ago)</div>')
 
-    extras = []
-    tg = alerts_mod.telegram
-    if tg and tg.username:
-        if c.telegram_chat_id:
-            extras.append('<div class="card ok">&#10003; Alerts on Telegram are connected.</div>')
-        else:
-            extras.append('<div class="card"><b>Get alerts on your phone</b>'
-                          '<p>Connect Telegram so you are notified instantly, even when this page is closed.</p>'
-                          f'<a href="https://t.me/{escape(tg.username)}?start={escape(token)}">'
-                          '<button class="yes" type="button">Connect Telegram</button></a></div>')
-
-    body = ("".join(parts) or f"<p>{who} has no active journey right now. You're all set.</p>") + "".join(extras)
+    body = "".join(parts) or f"<p>{who} has no active journey right now. You're all set.</p>"
     return _page(f"<h2>SafeSphere</h2>{body}<p style='color:#777;font-size:13px'>This page refreshes every 30 seconds.</p>", refresh=True)
 
 

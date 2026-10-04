@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../core/api_client.dart';
+import '../../core/scroll_fill.dart';
 import '../../models/journey.dart';
 import '../../services/auth_service.dart';
 import '../../services/journey_service.dart';
@@ -156,7 +157,7 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen> {
         body: SafeArea(
           child: Padding(
             padding: const EdgeInsets.all(20),
-            child: _completed ? _completedView() : _activeView(),
+            child: ScrollFill(child: _completed ? _completedView() : _activeView()),
           ),
         ),
       ),
@@ -288,7 +289,7 @@ class _LateSheet extends StatefulWidget {
 }
 
 class _LateSheetState extends State<_LateSheet> {
-  static const _presets = [15, 30, 45, 60, 120, 180];
+  static const _presets = [5, 10, 15, 20, 30, 45, 60, 90, 120];
   static const _maxMinutes = 720; // 12 h per extension (server also caps at 48 h from now)
 
   final _custom = TextEditingController();

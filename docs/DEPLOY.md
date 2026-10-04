@@ -82,21 +82,36 @@ Things to know:
 SMS app addressed to all saved contacts with your location link. It uses your SIM, works with no internet and no
 provider, and needs one tap on Send. Contacts are saved on the phone after each successful load for this reason.
 
+## 5b. Free email alerts (no payment needed)
+Render's free web services **block outbound SMTP ports 25, 465 and 587** (Render changelog, Sept 2025), so the usual
+"Gmail app password" method fails there. SafeSphere therefore sends email over **HTTPS** through **Brevo**. Brevo's
+published terms say the free plan allows 300 emails a day with no credit card (check them before relying on this).
+
+1. Sign up at **brevo.com**. A new account can be held for a short validation review.
+2. Brevo -> **Settings -> Senders, Domains & IPs -> Senders** -> add a sender (your own email address, name
+   "SafeSphere"). Brevo emails you a **6-digit code**; enter it to verify the sender.
+3. Brevo -> **SMTP & API -> API Keys** -> create a key. Use the **API key**, not the SMTP key.
+4. Render -> `safesphere-api` -> **Environment**, add:
+   * `BREVO_API_KEY` = the key (secret: never commit it, never paste it into chat)
+   * `EMAIL_FROM` = the sender address you verified in step 2
+   * `EMAIL_FROM_NAME` = `SafeSphere` (optional)
+   Save and wait for **Live**.
+5. In the app, add a contact **with an email address**, or tap the mail icon on an existing contact.
+
+How it works: for every alert, SafeSphere tries **SMS first** (only if an SMS provider is configured and accepts the
+message) and otherwise sends the **email**. With no SMS provider, email is the automatic channel. If a contact has an
+email, the invitation is also emailed automatically. When a provider refuses a message, the Render log shows its reason
+(for example `Brevo rejected the email: HTTP 401 ...`), never the key.
+
+Know the limits:
+* **Spam folder.** Brevo says addresses on free domains (gmail.com, yahoo.com and similar) cannot be authenticated, so
+  it replaces the "From" address with one of its own domains and such mail may be filtered to spam. For a demo, ask your
+  contact to check **Spam** and tap "Not spam". For reliable delivery, send from an address on a domain you own and
+  authenticate that domain in Brevo.
+* Email is slower to be noticed than an SMS. It is a free fallback, not a replacement for a paid SMS provider.
+* With no SMS key set, remove any old `FAST2SMS_API_KEY` from Render so the server does not make a refused call first.
+
 ## 6. Security checklist before real users
 HTTPS only (Render provides it), strong `JWT_SECRET` (auto-generated), database not public, rate limiting on
 (uses real client IPs behind the proxy), Alembic migrations instead of auto-created tables, backups, and a privacy
 policy that explains contacts, location and the audit log.
-
-## 7. Optional extra: Telegram alerts (off unless you set a bot token)
-1. In Telegram, open **@BotFather**, send `/newbot`, choose a name and a username ending in `bot`.
-   BotFather replies with a **token**. Treat it like a password.
-2. In Render: `safesphere-api` -> **Environment** -> add `TELEGRAM_BOT_TOKEN` = that token -> Save.
-   Render redeploys. Never put the token in GitHub.
-3. On startup the server finds the bot's username and registers its webhook automatically
-   (look for `Telegram webhook registered: True` in the Logs tab).
-4. A contact accepts your invitation, then taps **Connect Telegram** on their page. Telegram opens, they press
-   **Start**, and the bot replies "Connected". From then on every journey update and alert reaches them as a
-   Telegram notification. Telegram retries webhooks for a while, so linking still works if the free server was asleep.
-
-Telegram is only an *extra*: not everyone has it, so SMS stays the main channel. Without `TELEGRAM_BOT_TOKEN` the
-Telegram button never appears. Delivery order per contact: Telegram (only if that contact connected it), then SMS.

@@ -1,5 +1,4 @@
 """Central configuration, read once from environment variables."""
-import hashlib
 import os
 from dataclasses import dataclass
 
@@ -11,15 +10,6 @@ def normalise_db_url(url: str) -> str:
         if url.startswith(prefix):
             return "postgresql+psycopg://" + url[len(prefix):]
     return url
-
-
-def _telegram_secret() -> str:
-    """Shared secret Telegram echoes back on every webhook call, so we can reject forged requests."""
-    explicit = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
-    if explicit:
-        return explicit
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    return hashlib.sha256(("safesphere:" + token).encode()).hexdigest()[:48] if token else ""
 
 
 def _int(name: str, default: int) -> int:
@@ -48,9 +38,10 @@ class Settings:
 
     fast2sms_api_key: str = os.getenv("FAST2SMS_API_KEY", "")
 
-    telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    telegram_bot_username: str = os.getenv("TELEGRAM_BOT_USERNAME", "").lstrip("@")
-    telegram_webhook_secret: str = _telegram_secret()
+    # Email over HTTPS (Brevo). Render's free plan blocks SMTP ports, so plain SMTP is not an option there.
+    brevo_api_key: str = os.getenv("BREVO_API_KEY", "")
+    email_from: str = os.getenv("EMAIL_FROM", "")            # must be a sender you verified in Brevo
+    email_from_name: str = os.getenv("EMAIL_FROM_NAME", "SafeSphere")
 
     max_contacts: int = 10
 

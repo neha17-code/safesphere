@@ -36,6 +36,7 @@ class ContactService {
     required String name,
     required String phone,
     String? relationship,
+    String? email,
     int priority = 1,
   }) async {
     final res = await _api.post('/contacts', {
@@ -43,9 +44,12 @@ class ContactService {
       'phone': phone,
       'relationship_label': relationship,
       'priority': priority,
+      if (email != null && email.isNotEmpty) 'email': email,
     });
     return Contact.fromJson(res as Map<String, dynamic>);
   }
+
+  Future<void> setEmail(int id, String email) => _api.put('/contacts/$id/email', {'email': email});
 
   Future<void> resend(int id) => _api.post('/contacts/$id/resend');
 

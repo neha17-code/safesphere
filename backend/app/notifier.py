@@ -4,7 +4,7 @@ Delivery channels behind small interfaces (stdlib only, no SDKs).
                      so the app never claims an alert was sent when nothing left the server.
  - Fast2SmsNotifier: real SMS to Indian numbers through Fast2SMS (Quick SMS route).
  - TwilioNotifier  : real SMS through Twilio's REST API (works internationally).
- - TelegramClient  : free push-style messages to a contact who connected the SafeSphere bot.
+ - BrevoEmail      : email over HTTPS (works where SMTP ports are blocked, e.g. Render free plan).
 """
 import base64
 import json
@@ -79,36 +79,32 @@ class TwilioNotifier:
             return False
 
 
-class TelegramClient:
-    def __init__(self, token: str, username: str = ""):
-        self.token = token
-        self.username = username
+class BrevoEmail:
+    """Transactional email over HTTPS (port 443). Free plan: 300 emails/day, no card (Brevo's published terms)."""
+    URL = "https://api.brevo.com/v3/smtp/email"
 
-    def _call(self, method: str, payload: dict) -> dict | None:
-        req = urllib.request.Request(
-            f"https://api.telegram.org/bot{self.token}/{method}",
-            data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json"},
-        )
+    def send_email(self, to: str, subject: str, body: str) -> bool:
+        payload = json.dumps({
+            "sender": {"name": settings.email_from_name, "email": settings.email_from},
+            "to": [{"email": to}],
+            "subject": subject,
+            "textContent": body,
+        }).encode()
+        req = urllib.request.Request(self.URL, data=payload, headers={
+            "api-key": settings.brevo_api_key, "Content-Type": "application/json", "Accept": "application/json"})
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
-                return json.loads(resp.read())
-        except Exception as exc:  # never log the URL: it contains the bot token
-            log.error("Telegram %s failed: %s", method, type(exc).__name__)
-            return None
-
-    def send_message(self, chat_id: str, text: str) -> bool:
-        res = self._call("sendMessage", {"chat_id": chat_id, "text": text, "disable_web_page_preview": True})
-        return bool(res and res.get("ok"))
-
-    def set_webhook(self, url: str, secret: str) -> bool:
-        res = self._call("setWebhook", {"url": url, "secret_token": secret, "allowed_updates": ["message"]})
-        return bool(res and res.get("ok"))
-
-    def load_username(self) -> None:
-        res = self._call("getMe", {})
-        if res and res.get("ok"):
-            self.username = res["result"].get("username", "")
+                return 200 <= resp.status < 300
+        except urllib.error.HTTPError as exc:
+            try:
+                reason = exc.read().decode("utf-8", "replace")[:300]
+            except Exception:
+                reason = ""
+            log.error("Brevo rejected the email: HTTP %s %s", exc.code, reason)
+            return False
+        except Exception as exc:  # never crash the scheduler, never log the key
+            log.error("Brevo send failed: %s", type(exc).__name__)
+            return False
 
 
 def get_notifier():
@@ -120,5 +116,4 @@ def get_notifier():
 
 
 notifier = get_notifier()
-telegram = TelegramClient(settings.telegram_bot_token, settings.telegram_bot_username) \
-    if settings.telegram_bot_token else None
+emailer = BrevoEmail() if (settings.brevo_api_key and settings.email_from) else None

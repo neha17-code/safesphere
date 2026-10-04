@@ -10,7 +10,7 @@ from ..config import settings
 from ..database import get_db
 from ..deps import current_user
 from ..models import Consent, Contact, User
-from ..schemas import ContactIn, ContactOut, InviteOut
+from ..schemas import ContactEmailIn, ContactIn, ContactOut, InviteOut
 
 router = APIRouter(prefix="/contacts", tags=["contacts"])
 
@@ -36,6 +36,7 @@ def add_contact(body: ContactIn, user: User = Depends(current_user), db: Session
         raise HTTPException(409, "This phone number is already a contact")
     contact = Contact(owner_id=user.id, name=body.name.strip(), phone=body.phone,
                       relationship_label=body.relationship_label, priority=body.priority,
+                      email=body.email.lower() if body.email else None,
                       view_token=secrets.token_urlsafe(24))
     db.add(contact)
     db.flush()
@@ -66,6 +67,15 @@ def resend(contact_id: int, user: User = Depends(current_user), db: Session = De
     if contact.consent == Consent.CONFIRMED.value:
         raise HTTPException(409, "Already confirmed")
     send_consent_request(db, user, contact)
+    db.commit()
+
+
+@router.put("/{contact_id}/email", status_code=204)
+def set_email(contact_id: int, body: ContactEmailIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    contact = _owned(db, user, contact_id)
+    contact.email = body.email.lower()
+    if contact.consent == Consent.PENDING.value:      # invitation can now also reach them by email
+        send_consent_request(db, user, contact)
     db.commit()
 
 
