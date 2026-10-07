@@ -62,10 +62,22 @@ class Contact(Base):
     consent: Mapped[str] = mapped_column(String(12), default=Consent.PENDING.value)
     view_token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     email: Mapped[str | None] = mapped_column(String(254), nullable=True)
+    invite_sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    invite_channel: Mapped[str | None] = mapped_column(String(12), nullable=True)   # email | sms | sms+email | none
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    @property
+    def invite_status(self) -> str:
+        """NOT_SENT -> SENT -> ACCEPTED (or DECLINED): the progress the owner sees in the app."""
+        if self.consent == Consent.CONFIRMED.value:
+            return "ACCEPTED"
+        if self.consent == Consent.DECLINED.value:
+            return "DECLINED"
+        return "SENT" if self.invite_channel and self.invite_channel != "none" else "NOT_SENT"
 
     owner = relationship("User", back_populates="contacts")
     journeys = relationship("Journey", secondary=journey_contacts, back_populates="contacts")
+    push_subscriptions = relationship("PushSubscription", cascade="all, delete-orphan")
 
 
 class Journey(Base):
@@ -80,6 +92,7 @@ class Journey(Base):
     duress_triggered: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_progress_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     owner = relationship("User", back_populates="journeys")
     contacts = relationship("Contact", secondary=journey_contacts, back_populates="journeys")
@@ -110,3 +123,14 @@ class Event(Base):
     lat: Mapped[float | None] = mapped_column(Float, nullable=True)
     lng: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class PushSubscription(Base):
+    """One browser/phone a contact allowed notifications on (created when they tap 'Turn on notifications')."""
+    __tablename__ = "push_subscriptions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id", ondelete="CASCADE"), index=True)
+    endpoint: Mapped[str] = mapped_column(String(600), unique=True)
+    p256dh: Mapped[str] = mapped_column(String(200))
+    auth: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

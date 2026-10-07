@@ -4,13 +4,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..alerts import log_event, maps_link, send_to_contacts
+from dataclasses import asdict
+
+from ..alerts import log_event, maps_link, notify_contacts, send_to_contacts
 from ..database import get_db
 from ..deps import current_user
 from ..escalation import Stage
 from ..models import Consent, Contact, Journey, JourneyStatus, LocationPoint, User, utcnow
 from ..schemas import (AlertIn, AlertOut, ArriveIn, ArriveOut, ExtendIn, JourneyIn,
-                       JourneyOut, LocationIn, to_naive_utc)
+                       JourneyOut, JourneyStartOut, LocationIn, OutcomeOut, to_naive_utc)
 from ..security import verify_secret
 
 router = APIRouter(prefix="/journeys", tags=["journeys"])
@@ -24,7 +26,7 @@ def _owned(db: Session, user: User, journey_id: int) -> Journey:
     return j
 
 
-@router.post("", response_model=JourneyOut, status_code=201)
+@router.post("", response_model=JourneyStartOut, status_code=201)
 def start_journey(body: JourneyIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
     eta, now = to_naive_utc(body.expected_arrival_at), utcnow()
     if eta <= now:
@@ -49,12 +51,14 @@ def start_journey(body: JourneyIn, user: User = Depends(current_user), db: Sessi
     db.add(j)
     db.flush()
     mins = int((eta - now).total_seconds() // 60)
-    send_to_contacts(db, user, j.contacts,
-                     f"{user.name} started a journey to {j.destination}, arriving in about {mins} min. "
-                     f"You'll only be alerted if they don't check in.", "JOURNEY_STARTED", j)
+    outcomes = notify_contacts(db, user, j.contacts,
+                               f"{user.name} started a journey to {j.destination}, arriving in about {mins} min. "
+                               f"You'll only be alerted if they don't check in.", "JOURNEY_STARTED", j)
     log_event(db, user.id, "JOURNEY_STARTED", j.destination, j.id)
     db.commit()
-    return j
+    out = JourneyStartOut.model_validate(j)
+    out.notified = [OutcomeOut(**asdict(o)) for o in outcomes]
+    return out
 
 
 @router.get("/active", response_model=JourneyOut | None)
@@ -147,7 +151,9 @@ def journey_emergency(journey_id: int, body: AlertIn, user: User = Depends(curre
         raise HTTPException(409, "Journey is not active")
     j.status = JourneyStatus.EMERGENCY.value
     text = f"EMERGENCY: {user.name} needs help right now (journey to {j.destination}). {maps_link(body.lat, body.lng)}"
-    delivered, skipped = send_to_contacts(db, user, j.contacts, text, "EMERGENCY_ALERT", j, body.lat, body.lng)
+    outcomes = notify_contacts(db, user, j.contacts, text, "EMERGENCY_ALERT", j, body.lat, body.lng)
+    delivered = sum(o.ok for o in outcomes)
     log_event(db, user.id, "EMERGENCY_PRESSED", f"delivered={delivered}", j.id, body.lat, body.lng)
     db.commit()
-    return AlertOut(delivered_to=delivered, skipped_unconfirmed=skipped)
+    return AlertOut(delivered_to=delivered, skipped_unconfirmed=sum(o.reason == "NOT_ACCEPTED" for o in outcomes),
+                    results=[OutcomeOut(**asdict(o)) for o in outcomes])

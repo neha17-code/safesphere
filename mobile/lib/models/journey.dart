@@ -1,4 +1,5 @@
 import 'contact.dart';
+import 'delivery.dart';
 
 class Journey {
   final int id;
@@ -8,6 +9,7 @@ class Journey {
   final int escalationStage;
   final bool shareLocation;
   final List<Contact> contacts;
+  final List<DeliveryResult> notified; // who was told the journey started (only set when it starts)
 
   Journey({
     required this.id,
@@ -17,6 +19,7 @@ class Journey {
     required this.escalationStage,
     required this.shareLocation,
     required this.contacts,
+    this.notified = const [],
   });
 
   factory Journey.fromJson(Map<String, dynamic> j) => Journey(
@@ -29,5 +32,6 @@ class Journey {
         contacts: (j['contacts'] as List)
             .map((c) => Contact.fromJson(c as Map<String, dynamic>))
             .toList(),
+        notified: DeliveryResult.listFrom(j['notified']),
       );
 }

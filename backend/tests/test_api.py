@@ -8,13 +8,15 @@ from datetime import timedelta
 
 os.environ["DATABASE_URL"] = "sqlite:///./test_safesphere.db"
 os.environ["SCHEDULER_ENABLED"] = "false"
+os.environ["VAPID_PUBLIC_KEY"] = "TEST_PUBLIC_KEY"
+os.environ["VAPID_PRIVATE_KEY"] = "TEST_PRIVATE_KEY"
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.database import Base, SessionLocal, engine
 from app.main import app
-from app.models import Contact, Journey, utcnow
+from app.models import Contact, Journey, PushSubscription, utcnow
 from app import scheduler
 from app.routers import auth as auth_router
 from app.notifier import ConsoleNotifier
@@ -33,6 +35,7 @@ def client():
     box = Outbox()
     alerts_mod.notifier = box; scheduler_mod.notifier = box
     alerts_mod.emailer = None
+    alerts_mod.pusher = None
     auth_router._limiter.reset()      # each test starts with a fresh login/register allowance
     with TestClient(app) as c:
         c.outbox = box
@@ -215,3 +218,161 @@ def test_email_can_be_added_later_with_authorization(client):
     other = register(client, "eve@example.com")
     assert client.put(f"/contacts/{cid}/email", json={"email": "x@example.com"}, headers=other).status_code == 404
     assert client.put(f"/contacts/{cid}/email", json={"email": "not-an-email"}, headers=h).status_code == 422
+
+
+class RejectingEmail(FakeEmail):
+    def send_email(self, to, subject, body):
+        return False
+
+
+def test_invitation_progress_is_visible_to_the_owner(client):
+    mail = FakeEmail(); alerts_mod.emailer = mail
+    alerts_mod.notifier = ConsoleNotifier()               # no SMS: the email carries the invitation
+    h = register(client)
+    c = client.post("/contacts", json={"name": "Mom", "phone": "+919000000001", "email": "mom@example.com"}, headers=h).json()
+    assert c["invite_status"] == "SENT" and c["invite_channel"] == "email" and c["invite_sent_at"].endswith("Z")
+    with SessionLocal() as db:
+        token = db.get(Contact, c["id"]).view_token
+    client.post(f"/c/{token}/confirm", follow_redirects=False)
+    assert client.get("/contacts", headers=h).json()[0]["invite_status"] == "ACCEPTED"
+
+
+def test_unsent_invitation_is_reported_honestly_and_can_be_retried(client):
+    alerts_mod.notifier = ConsoleNotifier()               # no SMS and no email provider
+    h = register(client)
+    c = client.post("/contacts", json={"name": "Mom", "phone": "+919000000001"}, headers=h).json()
+    assert c["invite_status"] == "NOT_SENT"
+    r = client.post(f"/contacts/{c['id']}/resend", headers=h)
+    assert r.status_code == 200
+    assert r.json() == {"name": "Mom", "ok": False, "channel": "none", "reason": "EMAIL_NOT_CONFIGURED"}
+    mail = FakeEmail(); alerts_mod.emailer = mail          # provider appears + contact gets an address
+    client.put(f"/contacts/{c['id']}/email", json={"email": "mom@example.com"}, headers=h)
+    assert client.get("/contacts", headers=h).json()[0]["invite_status"] == "SENT"
+
+
+def test_provider_rejection_has_its_own_reason(client):
+    alerts_mod.notifier = ConsoleNotifier(); alerts_mod.emailer = RejectingEmail()
+    h = register(client)
+    c = client.post("/contacts", json={"name": "Mom", "phone": "+919000000001", "email": "mom@example.com"}, headers=h).json()
+    assert c["invite_status"] == "NOT_SENT"
+    assert client.post(f"/contacts/{c['id']}/resend", headers=h).json()["reason"] == "PROVIDER_REJECTED"
+
+
+def test_journey_start_says_who_was_notified(client):
+    mail = FakeEmail(); alerts_mod.emailer = mail
+    h = register(client); cid, _ = confirmed_contact(client, h, email="mom@example.com")
+    alerts_mod.notifier = ConsoleNotifier()
+    r = client.post("/journeys", headers=h, json={"destination": "Airport", "expected_arrival_at": eta(30), "contact_ids": [cid]})
+    assert r.status_code == 201
+    assert r.json()["notified"] == [{"name": "Mom", "ok": True, "channel": "email", "reason": ""}]
+
+
+def test_emergency_lists_each_contact_and_why_a_send_failed(client):
+    h = register(client); confirmed_contact(client, h)
+    alerts_mod.notifier = ConsoleNotifier()
+    body = client.post("/alerts/emergency", headers=h, json={}).json()
+    assert body["delivered_to"] == 0
+    assert body["results"] == [{"name": "Mom", "ok": False, "channel": "none", "reason": "EMAIL_NOT_CONFIGURED"}]
+
+
+def test_activity_never_shows_the_duress_alarm(client):
+    h = register(client); cid, _ = confirmed_contact(client, h)
+    client.put("/auth/pins", headers=h, json={"safe_pin": "1234", "duress_pin": "4321"})
+    jid = start(client, h, cid)
+    client.post(f"/journeys/{jid}/arrive", headers=h, json={"pin": "4321"})
+    types = [e["type"] for e in client.get("/alerts/events", headers=h).json()]
+    assert types and not any(t.startswith("DURESS") for t in types)
+
+
+def test_channel_status_reflects_real_setup(client):
+    h = register(client)
+    assert client.get("/status/channels", headers=h).json() == {"email": False, "sms": False, "push": False}
+    alerts_mod.emailer = FakeEmail()
+    assert client.get("/status/channels", headers=h).json()["email"] is True
+
+
+class FakePusher:
+    def __init__(self, result="ok"):
+        self.sent, self.result = [], result
+
+    def send(self, sub, payload, ttl=3600):
+        self.sent.append((sub["endpoint"], payload, ttl))
+        return self.result
+
+
+SUB = {"endpoint": "https://push.example.com/abc123", "keys": {"p256dh": "P" * 20, "auth": "A" * 10}}
+
+
+def test_push_needs_an_accepted_contact(client):
+    h = register(client)
+    cid = client.post("/contacts", json={"name": "Mom", "phone": "+919000000001"}, headers=h).json()["id"]
+    with SessionLocal() as db:
+        token = db.get(Contact, cid).view_token
+    assert client.post(f"/c/{token}/push", json=SUB).status_code == 403
+
+
+def test_push_rejects_a_bad_subscription(client):
+    h = register(client); cid, token = confirmed_contact(client, h)
+    assert client.post(f"/c/{token}/push", json={"endpoint": "http://insecure", "keys": SUB["keys"]}).status_code == 422
+    assert client.post(f"/c/{token}/push", json={"endpoint": SUB["endpoint"], "keys": {}}).status_code == 422
+
+
+def test_contact_who_enabled_push_is_alerted_without_opening_anything(client):
+    push = FakePusher(); alerts_mod.pusher = push
+    h = register(client); cid, token = confirmed_contact(client, h)
+    assert client.post(f"/c/{token}/push", json=SUB).status_code == 204
+    assert any("Notifications are on" in p["body"] for _, p, _ in push.sent)      # visible proof it works
+    push.sent.clear()
+    r = client.post("/journeys", headers=h, json={"destination": "Airport", "expected_arrival_at": eta(30), "contact_ids": [cid]})
+    assert r.status_code == 201
+    assert r.json()["notified"][0]["channel"].startswith("push")
+    assert any(p["title"] == "Journey started" and p["url"].endswith(token) for _, p, _ in push.sent)
+
+
+def test_emergency_pops_up_on_the_contacts_phone(client):
+    push = FakePusher(); alerts_mod.pusher = push
+    h = register(client); cid, token = confirmed_contact(client, h)
+    client.post(f"/c/{token}/push", json=SUB); push.sent.clear()
+    assert client.post("/alerts/emergency", headers=h, json={}).json()["delivered_to"] == 1
+    assert any(p["title"] == "EMERGENCY" for _, p, _ in push.sent)
+
+
+def test_push_alone_counts_as_delivered_when_sms_and_email_are_unavailable(client):
+    push = FakePusher(); alerts_mod.pusher = push
+    h = register(client); cid, token = confirmed_contact(client, h)
+    client.post(f"/c/{token}/push", json=SUB)
+    alerts_mod.notifier = ConsoleNotifier()            # no SMS provider, no email provider
+    assert client.post("/alerts/unsafe", headers=h, json={}).json()["results"][0]["channel"] == "push"
+
+
+def test_expired_subscription_is_removed(client):
+    push = FakePusher(); alerts_mod.pusher = push
+    h = register(client); cid, token = confirmed_contact(client, h)
+    client.post(f"/c/{token}/push", json=SUB)
+    push.result = "gone"
+    client.post("/alerts/unsafe", headers=h, json={})
+    with SessionLocal() as db:
+        assert db.query(PushSubscription).count() == 0
+
+
+def test_progress_updates_are_pushed_on_a_schedule(client):
+    push = FakePusher(); alerts_mod.pusher = push
+    h = register(client); cid, token = confirmed_contact(client, h)
+    client.post(f"/c/{token}/push", json=SUB)
+    jid = start(client, h, cid, minutes=40)
+    push.sent.clear()
+    with SessionLocal() as db:
+        db.get(Journey, jid).created_at = utcnow() - timedelta(minutes=20)
+        db.commit()
+    scheduler.tick()
+    assert any("on the way" in p["body"] for _, p, _ in push.sent)
+    count = len(push.sent)
+    scheduler.tick()
+    assert len(push.sent) == count                      # not repeated before the next interval
+
+
+def test_page_offers_notifications_and_serves_the_service_worker(client):
+    h = register(client); cid, token = confirmed_contact(client, h)
+    assert "Turn on notifications" in client.get(f"/c/{token}").text
+    sw = client.get("/c/sw.js")
+    assert sw.status_code == 200 and "addEventListener('push'" in sw.text

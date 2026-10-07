@@ -49,8 +49,21 @@ class _FeelUnsafeScreenState extends State<FeelUnsafeScreen> {
   Future<void> _notify() async {
     if (_selected.isEmpty) return _toast('No confirmed contacts to notify.');
     try {
-      final n = await JourneyService().feelUnsafe(_selected.toList());
-      _toast(n > 0 ? 'Sent to $n contact${n == 1 ? "" : "s"}.' : 'No one could be reached.');
+      final results = await JourneyService().feelUnsafe(_selected.toList());
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          scrollable: true,
+          title: Text(results.any((r) => r.ok) ? 'Your contacts were told' : 'No one could be reached'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: results.map((r) => Padding(padding: const EdgeInsets.only(bottom: 6), child: Text(r.describe()))).toList(),
+          ),
+          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
+        ),
+      );
     } on ApiException catch (e) {
       _toast('Not sent: ${e.message}');
     }

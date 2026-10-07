@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/api_client.dart';
 import '../../core/scroll_fill.dart';
+import '../../models/delivery.dart';
 import '../../models/journey.dart';
 import '../../services/auth_service.dart';
 import '../../services/journey_service.dart';
@@ -21,6 +22,7 @@ class ActiveJourneyScreen extends StatefulWidget {
 class _ActiveJourneyScreenState extends State<ActiveJourneyScreen> {
   final _service = JourneyService();
   late Journey _journey = widget.journey;
+  late final List<DeliveryResult> _startResults = widget.journey.notified; // kept even when the journey is refreshed
   bool _completed = false;
   bool _hasPins = false;
   Timer? _refreshTimer;
@@ -186,6 +188,10 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen> {
         const SizedBox(height: 12),
         _infoCard(Icons.people_outline, 'Following you', _journey.contacts.map((c) => c.name).join(', ')),
         const SizedBox(height: 12),
+        if (_startResults.isNotEmpty) ...[
+          _notifiedCard(),
+          const SizedBox(height: 12),
+        ],
         _infoCard(Icons.access_time, 'Expected arrival',
             '${TimeOfDay.fromDateTime(_journey.expectedArrival).format(context)}  ·  ${_countdown()}'),
         if (_journey.shareLocation) ...[
@@ -227,6 +233,30 @@ class _ActiveJourneyScreenState extends State<ActiveJourneyScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _notifiedCard() {
+    final anyOk = _startResults.any((r) => r.ok);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: anyOk ? const Color(0xFFE8F5E9) : const Color(0xFFFFEBEE),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(anyOk ? 'Your contacts were told' : 'Nobody could be told yet',
+              style: const TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 6),
+          ..._startResults.map((r) => Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(r.describe()),
+              )),
+        ],
+      ),
     );
   }
 

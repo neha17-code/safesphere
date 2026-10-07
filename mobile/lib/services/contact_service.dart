@@ -4,6 +4,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../core/api_client.dart';
 import '../models/contact.dart';
+import '../models/delivery.dart';
 
 /// Contacts live on the server (real phone numbers + consent status).
 /// A copy of the last list is kept on the phone so an emergency SMS still works offline.
@@ -51,7 +52,9 @@ class ContactService {
 
   Future<void> setEmail(int id, String email) => _api.put('/contacts/$id/email', {'email': email});
 
-  Future<void> resend(int id) => _api.post('/contacts/$id/resend');
+  /// Sends the invitation again and reports honestly whether it went out.
+  Future<DeliveryResult> resend(int id) async =>
+      DeliveryResult.fromJson((await _api.post('/contacts/$id/resend')) as Map<String, dynamic>);
 
   /// {message, link, whatsapp_url} for sharing the invitation yourself.
   Future<Map<String, dynamic>> getInvite(int id) async =>

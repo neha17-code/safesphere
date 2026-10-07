@@ -1,4 +1,5 @@
 import '../core/api_client.dart';
+import '../models/delivery.dart';
 import '../models/journey.dart';
 import 'location_service.dart';
 
@@ -46,21 +47,21 @@ class JourneyService {
   }
 
   /// Returns how many contacts were actually reached.
-  Future<int> emergency({int? journeyId}) async {
+  Future<List<DeliveryResult>> emergency({int? journeyId}) async {
     final pos = await LocationService.current();
     final body = {'lat': pos?.latitude, 'lng': pos?.longitude};
     final path = journeyId == null ? '/alerts/emergency' : '/journeys/$journeyId/emergency';
     final res = await _api.post(path, body);
-    return res['delivered_to'] as int;
+    return DeliveryResult.listFrom(res['results']);
   }
 
-  Future<int> feelUnsafe(List<int> contactIds) async {
+  Future<List<DeliveryResult>> feelUnsafe(List<int> contactIds) async {
     final pos = await LocationService.current();
     final res = await _api.post('/alerts/unsafe', {
       'contact_ids': contactIds,
       'lat': pos?.latitude,
       'lng': pos?.longitude,
     });
-    return res['delivered_to'] as int;
+    return DeliveryResult.listFrom(res['results']);
   }
 }

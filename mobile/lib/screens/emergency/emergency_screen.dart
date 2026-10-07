@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api_client.dart';
+import '../../models/delivery.dart';
 import '../../services/contact_service.dart';
 import '../../services/journey_service.dart';
 import '../../services/location_service.dart';
@@ -16,7 +17,7 @@ class EmergencyScreen extends StatefulWidget {
 
 class _EmergencyScreenState extends State<EmergencyScreen> {
   bool _busy = false;
-  int? _delivered; // null = not sent yet
+  List<DeliveryResult>? _results; // null = not sent yet
 
   void _toast(String m) {
     if (!mounted) return;
@@ -40,8 +41,8 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
 
     setState(() => _busy = true);
     try {
-      final n = await JourneyService().emergency(journeyId: widget.journeyId);
-      if (mounted) setState(() => _delivered = n);
+      final results = await JourneyService().emergency(journeyId: widget.journeyId);
+      if (mounted) setState(() => _results = results);
     } on ApiException catch (e) {
       _toast('Alert NOT sent: ${e.message}. Use "SMS from my phone" below.');
     } finally {
@@ -87,7 +88,7 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
             builder: (context, c) => SingleChildScrollView(
               child: ConstrainedBox(
                 constraints: BoxConstraints(minHeight: c.maxHeight),
-                child: IntrinsicHeight(child: _delivered == null ? _ready() : _result()),
+                child: IntrinsicHeight(child: _results == null ? _ready() : _result()),
               ),
             ),
           ),
@@ -149,14 +150,16 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
       );
 
   Widget _result() {
-    final reached = _delivered! > 0;
+    final results = _results!;
+    final reached = results.any((r) => r.ok);
+    final count = results.where((r) => r.ok).length;
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         Icon(reached ? Icons.check_circle : Icons.error, size: 80, color: reached ? Colors.green : Colors.red),
         const SizedBox(height: 24),
         Text(
-          reached ? 'Alert sent to $_delivered contact${_delivered == 1 ? "" : "s"}' : 'No one could be alerted',
+          reached ? 'Alert sent to $count contact${count == 1 ? "" : "s"}' : 'No one could be alerted',
           style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
           textAlign: TextAlign.center,
         ),
@@ -168,7 +171,12 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
           style: const TextStyle(fontSize: 16),
           textAlign: TextAlign.center,
         ),
-        const SizedBox(height: 32),
+        const SizedBox(height: 16),
+        ...results.map((r) => Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(r.describe(), textAlign: TextAlign.center, style: TextStyle(color: r.ok ? Colors.green.shade800 : Colors.red.shade800)),
+            )),
+        const SizedBox(height: 24),
         _callButton(),
         const SizedBox(height: 12),
         _smsButton(),

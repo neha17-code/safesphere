@@ -4,6 +4,8 @@ import '../../core/api_client.dart';
 import '../../core/config.dart';
 import '../../services/auth_service.dart';
 import '../../services/notification_service.dart';
+import '../../services/status_service.dart';
+import '../activity/activity_screen.dart';
 import '../auth/login_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -16,6 +18,7 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   final _auth = AuthService();
   Map<String, dynamic>? _me;
+  Map<String, dynamic>? _channels;
 
   @override
   void initState() {
@@ -23,6 +26,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _auth.me().then((u) {
       if (mounted) setState(() => _me = u);
     }).catchError((_) {});
+    StatusService().channels().then((c) {
+      if (mounted) setState(() => _channels = c);
+    }).catchError((_) {});
+  }
+
+  String _channelsText() {
+    final c = _channels;
+    if (c == null) return 'Checking...';
+    String f(String label, bool on) => '$label: ${on ? "ready" : "not set up"}';
+    return '${f("Phone notifications", c["push"] == true)}\n${f("Email", c["email"] == true)}\n${f("SMS", c["sms"] == true)}';
   }
 
   void _toast(String m) {
@@ -130,6 +143,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
               leading: Icon(Icons.cloud_outlined),
               title: Text('Server'),
               subtitle: Text(apiBaseUrl),
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.notifications_active_outlined),
+              title: const Text('Alert channels on the server'),
+              subtitle: Text(_channelsText()),
+              isThreeLine: true,
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.history),
+              title: const Text('Activity'),
+              subtitle: const Text('What was sent, to whom, and whether it worked'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ActivityScreen())),
             ),
             const Divider(),
             ListTile(

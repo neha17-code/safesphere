@@ -5,12 +5,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from dataclasses import asdict
+
 from ..alerts import link_for, send_consent_request
 from ..config import settings
 from ..database import get_db
 from ..deps import current_user
 from ..models import Consent, Contact, User
-from ..schemas import ContactEmailIn, ContactIn, ContactOut, InviteOut
+from ..schemas import ContactEmailIn, ContactIn, ContactOut, InviteOut, OutcomeOut
 
 router = APIRouter(prefix="/contacts", tags=["contacts"])
 
@@ -61,13 +63,15 @@ def invite(contact_id: int, user: User = Depends(current_user), db: Session = De
                      whatsapp_url=f"https://wa.me/{digits}?text={urllib.parse.quote(message)}")
 
 
-@router.post("/{contact_id}/resend", status_code=204)
+@router.post("/{contact_id}/resend", response_model=OutcomeOut)
 def resend(contact_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Send the invitation again (SMS/email) and say honestly whether it went out."""
     contact = _owned(db, user, contact_id)
     if contact.consent == Consent.CONFIRMED.value:
         raise HTTPException(409, "Already confirmed")
-    send_consent_request(db, user, contact)
+    outcome = send_consent_request(db, user, contact)
     db.commit()
+    return OutcomeOut(**asdict(outcome))
 
 
 @router.put("/{contact_id}/email", status_code=204)

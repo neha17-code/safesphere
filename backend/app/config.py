@@ -43,6 +43,13 @@ class Settings:
     email_from: str = os.getenv("EMAIL_FROM", "")            # must be a sender you verified in Brevo
     email_from_name: str = os.getenv("EMAIL_FROM_NAME", "SafeSphere")
 
+    # Web Push: notifications that pop up on a contact's phone with no app and nothing open.
+    # Generate the keys once with:  python scripts/gen_vapid.py
+    vapid_public_key: str = os.getenv("VAPID_PUBLIC_KEY", "")
+    vapid_private_key: str = os.getenv("VAPID_PRIVATE_KEY", "")
+    vapid_subject: str = os.getenv("VAPID_SUBJECT") or "mailto:" + (os.getenv("EMAIL_FROM") or "admin@example.com")
+    progress_update_minutes: int = _int("PROGRESS_UPDATE_MINUTES", 15)   # 0 turns the regular updates off
+
     max_contacts: int = 10
 
     def validate(self) -> None:

@@ -88,6 +88,16 @@ class ContactOut(BaseModel):
     priority: int
     consent: str
     email: str | None = None
+    invite_status: str = "NOT_SENT"            # NOT_SENT | SENT | ACCEPTED | DECLINED
+    invite_channel: str | None = None
+    invite_sent_at: UtcDt | None = None
+
+
+class OutcomeOut(BaseModel):
+    name: str
+    ok: bool
+    channel: str
+    reason: str = ""
 
 
 class ContactEmailIn(BaseModel):
@@ -133,6 +143,10 @@ class JourneyOut(BaseModel):
     contacts: list[ContactOut]
 
 
+class JourneyStartOut(JourneyOut):
+    notified: list[OutcomeOut] = []     # who was told the journey started, and how
+
+
 class ArriveOut(BaseModel):
     status: str
     completed_at: UtcDt
@@ -148,6 +162,7 @@ class AlertIn(BaseModel):
 class AlertOut(BaseModel):
     delivered_to: int
     skipped_unconfirmed: int
+    results: list[OutcomeOut] = []
 
 
 class EventOut(BaseModel):

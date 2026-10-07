@@ -5,13 +5,16 @@ Consent flow: PENDING -> (contact taps Accept) -> CONFIRMED. Alerts are only eve
 from html import escape
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import alerts as alerts_mod
 from ..alerts import log_event, maps_link
+from ..config import settings
 from ..database import get_db
-from ..models import Consent, Contact, Event, JourneyStatus, LocationPoint, User, utcnow
+from ..models import Consent, Contact, Event, JourneyStatus, LocationPoint, PushSubscription, User, utcnow
 
 router = APIRouter(prefix="/c", tags=["contact-view"], include_in_schema=False)
 
@@ -34,6 +37,64 @@ def _contact(db: Session, token: str) -> Contact:
     if not c:
         raise HTTPException(404, "This link is not valid")
     return c
+
+
+SW_JS = """self.addEventListener('push', function (e) {
+  var d = {title: 'SafeSphere', body: '', url: '/'};
+  try { d = Object.assign(d, e.data.json()); } catch (err) {}
+  e.waitUntil(self.registration.showNotification(d.title, {
+    body: d.body,
+    data: {url: d.url},
+    requireInteraction: /EMERGENCY|SILENT|URGENT/.test(d.title)
+  }));
+});
+self.addEventListener('notificationclick', function (e) {
+  e.notification.close();
+  e.waitUntil(clients.openWindow(e.notification.data.url));
+});
+"""
+
+PUSH_CARD = """<div class="card" id="pushcard"><b>Get alerts on this phone</b>
+<p id="pushmsg">Turn on notifications to be alerted instantly, even when this page is closed.</p>
+<button class="yes" type="button" id="pushbtn">Turn on notifications</button></div>
+<script>
+var KEY='__KEY__', TOKEN='__TOKEN__';
+function b64(s){var p='='.repeat((4-s.length%4)%4),r=(s+p).replace(/-/g,'+').replace(/_/g,'/'),raw=atob(r),o=new Uint8Array(raw.length);for(var i=0;i<raw.length;i++)o[i]=raw.charCodeAt(i);return o;}
+var msg=document.getElementById('pushmsg'), btn=document.getElementById('pushbtn');
+async function state(){
+  if(!('serviceWorker' in navigator)||!('PushManager' in window)){
+    msg.textContent='This browser cannot receive notifications. On iPhone, add this page to the Home Screen first (Share, then Add to Home Screen) and open it from there.';
+    btn.style.display='none'; return;}
+  var reg=await navigator.serviceWorker.getRegistration('/c/');
+  var sub=reg&&await reg.pushManager.getSubscription();
+  if(sub&&Notification.permission==='granted'){msg.textContent='Notifications are ON for this device.';btn.style.display='none';}
+}
+btn.onclick=async function(){
+  try{
+    var perm=await Notification.requestPermission();
+    if(perm!=='granted'){msg.textContent='Notifications are blocked. Allow them in your browser settings, then try again.';return;}
+    var reg=await navigator.serviceWorker.register('/c/sw.js',{scope:'/c/'});
+    await navigator.serviceWorker.ready;
+    var sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:b64(KEY)});
+    var r=await fetch('/c/'+TOKEN+'/push',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub.toJSON())});
+    if(r.ok){msg.textContent='Done! Notifications are ON for this device.';btn.style.display='none';}
+    else{msg.textContent='Could not turn on notifications (error '+r.status+').';}
+  }catch(e){msg.textContent='Could not turn on notifications: '+e.message;}
+};
+state();
+</script>"""
+
+
+class PushIn(BaseModel):
+    endpoint: str = Field(max_length=600)
+    keys: dict[str, str]
+
+
+@router.get("/sw.js")
+def service_worker():
+    """Must be defined BEFORE /{token}, otherwise 'sw.js' would be read as a contact token."""
+    return Response(SW_JS, media_type="application/javascript",
+                    headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/c/"})
 
 
 @router.get("/{token}", response_class=HTMLResponse)
@@ -83,6 +144,8 @@ def view(token: str, db: Session = Depends(get_db)):
             parts.append(f'<div class="card ok"><b>{who}</b> arrived safely at {escape(j.destination)} ({ago} min ago)</div>')
 
     body = "".join(parts) or f"<p>{who} has no active journey right now. You're all set.</p>"
+    if settings.vapid_public_key:
+        body += PUSH_CARD.replace("__KEY__", escape(settings.vapid_public_key)).replace("__TOKEN__", escape(token))
     return _page(f"<h2>SafeSphere</h2>{body}<p style='color:#777;font-size:13px'>This page refreshes every 30 seconds.</p>", refresh=True)
 
 
@@ -102,3 +165,26 @@ def confirm(token: str, db: Session = Depends(get_db)):
 @router.post("/{token}/decline")
 def decline(token: str, db: Session = Depends(get_db)):
     return _set_consent(db, token, Consent.DECLINED)
+
+
+@router.post("/{token}/push", status_code=204)
+def subscribe(token: str, sub: PushIn, db: Session = Depends(get_db)):
+    """The contact tapped 'Turn on notifications': remember this device so alerts can pop up on it."""
+    c = _contact(db, token)
+    if c.consent != Consent.CONFIRMED.value:
+        raise HTTPException(403, "Accept the invitation first")
+    p256dh, auth = sub.keys.get("p256dh"), sub.keys.get("auth")
+    if not p256dh or not auth or not sub.endpoint.startswith("https://"):
+        raise HTTPException(422, "Invalid subscription")
+    existing = db.scalar(select(PushSubscription).where(PushSubscription.endpoint == sub.endpoint))
+    if existing:
+        existing.contact_id, existing.p256dh, existing.auth = c.id, p256dh, auth
+    else:
+        db.add(PushSubscription(contact_id=c.id, endpoint=sub.endpoint, p256dh=p256dh, auth=auth))
+    log_event(db, c.owner_id, "PUSH_ENABLED", c.name, contact_id=c.id)
+    db.commit()
+    db.refresh(c)
+    owner = db.get(User, c.owner_id)
+    # a visible test message, so the contact (and the owner) can see that it really works
+    alerts_mod.push_to_contact(db, c, "SafeSphere", f"Notifications are on. You'll be alerted here if {owner.name} may need help.", ttl=300)
+    db.commit()

@@ -3,6 +3,7 @@ Delivery channels behind small interfaces (stdlib only, no SDKs).
  - ConsoleNotifier : no SMS provider configured. Logs the text but reports NOT delivered,
                      so the app never claims an alert was sent when nothing left the server.
  - Fast2SmsNotifier: real SMS to Indian numbers through Fast2SMS (Quick SMS route).
+ - WebPusher       : free push notifications to a contact's phone (they enable it once on their page).
  - TwilioNotifier  : real SMS through Twilio's REST API (works internationally).
  - BrevoEmail      : email over HTTPS (works where SMTP ports are blocked, e.g. Render free plan).
 """
@@ -107,6 +108,32 @@ class BrevoEmail:
             return False
 
 
+class WebPusher:
+    """Sends a notification to one subscribed device. Returns 'ok', 'gone' (subscription expired) or 'fail'."""
+
+    def send(self, sub: dict, payload: dict, ttl: int = 3600) -> str:
+        try:
+            from pywebpush import WebPushException, webpush
+        except ImportError:
+            log.error("pywebpush is not installed: web push is disabled")
+            return "fail"
+        try:
+            webpush(subscription_info=sub, data=json.dumps(payload),
+                    vapid_private_key=settings.vapid_private_key,
+                    vapid_claims={"sub": settings.vapid_subject},   # pywebpush mutates this dict: pass a fresh one
+                    ttl=ttl)
+            return "ok"
+        except WebPushException as exc:
+            status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+            if status in (404, 410):          # the contact removed the permission or the subscription expired
+                return "gone"
+            log.error("Web push rejected: HTTP %s", status)
+            return "fail"
+        except Exception as exc:  # never crash the scheduler
+            log.error("Web push failed: %s", type(exc).__name__)
+            return "fail"
+
+
 def get_notifier():
     if settings.fast2sms_api_key:
         return Fast2SmsNotifier()
@@ -117,3 +144,4 @@ def get_notifier():
 
 notifier = get_notifier()
 emailer = BrevoEmail() if (settings.brevo_api_key and settings.email_from) else None
+pusher = WebPusher() if (settings.vapid_public_key and settings.vapid_private_key) else None

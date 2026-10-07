@@ -1,11 +1,12 @@
 import io
 import json
+import sys
 import unittest
 import urllib.error
 from types import SimpleNamespace
 from unittest import mock
 
-from app.notifier import BrevoEmail, Fast2SmsNotifier, indian_mobile
+from app.notifier import BrevoEmail, Fast2SmsNotifier, WebPusher, indian_mobile
 
 CFG = SimpleNamespace(fast2sms_api_key="KEY")
 MAIL_CFG = SimpleNamespace(brevo_api_key="BKEY", email_from="alerts@example.com", email_from_name="SafeSphere")
@@ -98,6 +99,50 @@ class Brevo(unittest.TestCase):
     def test_network_error_is_not_delivery_and_does_not_raise(self):
         with mock.patch("app.notifier.settings", MAIL_CFG), mock.patch("urllib.request.urlopen", side_effect=OSError("down")):
             self.assertFalse(BrevoEmail().send_email("mom@example.com", "S", "B"))
+
+
+class WebPush(unittest.TestCase):
+    CFG = SimpleNamespace(vapid_private_key="PRIV", vapid_subject="mailto:a@b.c")
+    SUB = {"endpoint": "https://push.example/x", "keys": {"p256dh": "p", "auth": "a"}}
+
+    @staticmethod
+    def _module(side_effect=None):
+        class WebPushException(Exception):
+            def __init__(self, status):
+                super().__init__("push failed")
+                self.status_code = status
+        return SimpleNamespace(webpush=mock.Mock(side_effect=side_effect), WebPushException=WebPushException)
+
+    def _send(self, module):
+        with mock.patch("app.notifier.settings", self.CFG), mock.patch.dict(sys.modules, {"pywebpush": module}):
+            return WebPusher().send(self.SUB, {"title": "T", "body": "B", "url": "https://x/c/t"}, ttl=600)
+
+    def test_success_sends_the_payload_signed_with_our_key(self):
+        module = self._module()
+        self.assertEqual(self._send(module), "ok")
+        kwargs = module.webpush.call_args.kwargs
+        self.assertEqual(kwargs["subscription_info"], self.SUB)
+        self.assertEqual(kwargs["vapid_private_key"], "PRIV")
+        self.assertEqual(kwargs["vapid_claims"], {"sub": "mailto:a@b.c"})
+        self.assertEqual(kwargs["ttl"], 600)
+        self.assertEqual(json.loads(kwargs["data"])["title"], "T")
+
+    def test_expired_subscription_is_reported_as_gone(self):
+        module = self._module()
+        module.webpush.side_effect = module.WebPushException(410)
+        self.assertEqual(self._send(module), "gone")
+
+    def test_other_push_service_errors_are_a_failure_not_a_removal(self):
+        module = self._module()
+        module.webpush.side_effect = module.WebPushException(500)
+        self.assertEqual(self._send(module), "fail")
+
+    def test_unexpected_error_never_raises(self):
+        self.assertEqual(self._send(self._module(side_effect=OSError("down"))), "fail")
+
+    def test_missing_library_disables_push_instead_of_crashing(self):
+        with mock.patch("app.notifier.settings", self.CFG), mock.patch.dict(sys.modules, {"pywebpush": None}):
+            self.assertEqual(WebPusher().send(self.SUB, {}), "fail")
 
 
 if __name__ == "__main__":

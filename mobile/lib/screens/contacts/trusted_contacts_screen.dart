@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -21,15 +23,19 @@ class _TrustedContactsScreenState extends State<TrustedContactsScreen> {
   List<Contact> _contacts = [];
   int _priority = 1;
   bool _loading = true;
+  Timer? _poll;
 
   @override
   void initState() {
     super.initState();
     _load();
+    // keeps the progress live: the dot turns green by itself when a contact accepts
+    _poll = Timer.periodic(const Duration(seconds: 10), (_) => _load(quiet: true));
   }
 
   @override
   void dispose() {
+    _poll?.cancel();
     _name.dispose();
     _phone.dispose();
     _email.dispose();
@@ -41,7 +47,7 @@ class _TrustedContactsScreenState extends State<TrustedContactsScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool quiet = false}) async {
     try {
       final list = await _service.getContacts();
       if (!mounted) return;
@@ -52,7 +58,7 @@ class _TrustedContactsScreenState extends State<TrustedContactsScreen> {
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      _toast(e.message);
+      if (!quiet) _toast(e.message);
     }
   }
 
@@ -74,7 +80,9 @@ class _TrustedContactsScreenState extends State<TrustedContactsScreen> {
       await _load();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('${contact.name} added. Send the invitation so they can accept.'),
+        content: Text(contact.inviteStatus == 'SENT'
+            ? '${contact.name} added. Invitation sent. Waiting for them to accept.'
+            : '${contact.name} added, but the invitation was NOT sent. Use WhatsApp, or add an email.'),
         duration: const Duration(seconds: 10),
         action: SnackBarAction(label: 'WHATSAPP', onPressed: () => _inviteViaWhatsApp(contact)),
       ));
@@ -249,33 +257,92 @@ class _TrustedContactsScreenState extends State<TrustedContactsScreen> {
     );
   }
 
+  String _sentAt(Contact c) {
+    final t = c.inviteSentAt;
+    return t == null ? '' : ' at ${TimeOfDay.fromDateTime(t).format(context)}';
+  }
+
+  /// One plain sentence per stage: not sent -> sent -> accepted.
+  String _progressText(Contact c) {
+    final how = (c.inviteChannel ?? '')
+        .split('+')
+        .map((x) => x == 'email' ? 'emailed' : (x == 'sms' ? 'texted' : x))
+        .join(' and ');
+    switch (c.inviteStatus) {
+      case 'ACCEPTED':
+        return 'Accepted. Alerts go by ${c.email != null ? "email ${c.email}" : "SMS only (add an email)"} and phone notification if they turned it on.';
+      case 'DECLINED':
+        return 'Declined: they will not receive alerts.';
+      case 'SENT':
+        return 'Invitation $how${_sentAt(c)}. Waiting for them to accept.';
+      default:
+        return 'Invitation NOT sent yet. ${c.email == null ? "Add an email, or use WhatsApp." : "Tap the menu to send it."}';
+    }
+  }
+
+  IconData _progressIcon(Contact c) => switch (c.inviteStatus) {
+        'ACCEPTED' => Icons.check_circle,
+        'DECLINED' => Icons.cancel,
+        'SENT' => Icons.hourglass_top,
+        _ => Icons.error_outline,
+      };
+
+  Color _progressColor(Contact c) => switch (c.inviteStatus) {
+        'ACCEPTED' => Colors.green,
+        'DECLINED' => Colors.red,
+        'SENT' => Colors.orange,
+        _ => Colors.red,
+      };
+
+  Future<void> _resend(Contact c) async {
+    try {
+      final r = await _service.resend(c.id);
+      _toast(r.ok
+          ? 'Invitation sent to ${c.name} by ${r.channelText}. Waiting for them to accept.'
+          : 'Invitation NOT sent to ${c.name}: ${r.reasonText}.');
+      await _load();
+    } on ApiException catch (e) {
+      _toast(e.message);
+    }
+  }
+
   Widget _contactTile(Contact c) {
     return ListTile(
       tileColor: const Color(0xFFF3F3F6),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       title: Text(c.name),
-      isThreeLine: c.isConfirmed,
-      subtitle: Text(
-        '${c.phone} · ${c.priority == 1 ? "alerted first" : "escalation"}'
-        '${c.isConfirmed ? (c.email != null ? "\nAlerts by email: ${c.email}" : "\nNo email yet: tap the mail icon to add one") : ""}',
-      ),
-      leading: Icon(Icons.circle, size: 14, color: _chipColor(c.consent)),
+      isThreeLine: true,
+      subtitle: Text('${c.phone} · ${c.priority == 1 ? "alerted first" : "escalation"}\n${_progressText(c)}'),
+      leading: Icon(_progressIcon(c), color: _progressColor(c)),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           if (!c.isConfirmed)
             IconButton(
               icon: const Icon(Icons.chat_outlined, color: Colors.green),
-              tooltip: 'Send invitation on WhatsApp (${c.consent.toLowerCase()})',
+              tooltip: 'Send invitation on WhatsApp',
               onPressed: () => _inviteViaWhatsApp(c),
             ),
-          if (c.email == null)
-            IconButton(
-              icon: const Icon(Icons.mail_outline),
-              tooltip: 'Add email for alerts',
-              onPressed: () => _setEmail(c),
-            ),
-          IconButton(icon: const Icon(Icons.delete_outline), onPressed: () => _remove(c)),
+          PopupMenuButton<String>(
+            onSelected: (v) {
+              switch (v) {
+                case 'resend':
+                  _resend(c);
+                  break;
+                case 'email':
+                  _setEmail(c);
+                  break;
+                case 'delete':
+                  _remove(c);
+                  break;
+              }
+            },
+            itemBuilder: (_) => [
+              if (!c.isConfirmed) const PopupMenuItem(value: 'resend', child: Text('Send invitation again')),
+              PopupMenuItem(value: 'email', child: Text(c.email == null ? 'Add email' : 'Change email')),
+              const PopupMenuItem(value: 'delete', child: Text('Remove contact')),
+            ],
+          ),
         ],
       ),
     );

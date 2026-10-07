@@ -9,10 +9,12 @@ from datetime import timedelta
 
 from sqlalchemy import delete, select
 
+from . import alerts as alerts_mod
 from .alerts import log_event, send_to_contacts
 from .config import settings
 from .database import SessionLocal
 from .escalation import Policy, Stage, pending_transitions, target_stage
+from .progress import progress_due, progress_text
 from .models import Journey, JourneyStatus, LocationPoint, User, utcnow
 from .notifier import notifier
 
@@ -52,6 +54,15 @@ def tick() -> None:
                 _apply(db, j, owner, stage)
                 j.escalation_stage = int(stage)
                 db.commit()                                          # commit per stage: never double-send
+        if settings.progress_update_minutes > 0 and alerts_mod.pusher is not None:
+            interval = timedelta(minutes=settings.progress_update_minutes)
+            for j in db.scalars(select(Journey).where(Journey.status == JourneyStatus.ACTIVE.value)).all():
+                if progress_due(j.last_progress_at or j.created_at, now, interval):
+                    owner = db.get(User, j.owner_id)
+                    mins = int((j.expected_arrival_at - now).total_seconds() // 60)
+                    alerts_mod.push_progress(db, owner, j, progress_text(owner.name, j.destination, mins))
+                    j.last_progress_at = now
+                    db.commit()
         cutoff = now - timedelta(hours=settings.location_retention_hours)
         db.execute(delete(LocationPoint).where(LocationPoint.recorded_at < cutoff))
         db.commit()

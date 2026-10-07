@@ -111,6 +111,39 @@ Know the limits:
 * Email is slower to be noticed than an SMS. It is a free fallback, not a replacement for a paid SMS provider.
 * With no SMS key set, remove any old `FAST2SMS_API_KEY` from Render so the server does not make a refused call first.
 
+## 5c. Phone notifications for contacts (free, no app, nothing to open)
+This is what makes alerts **pop up on the contact's phone by themselves**, like any app notification, even when
+they never open the link again. It uses the browser's Web Push standard.
+
+**One-time server setup**
+1. Install the new dependency and generate your server's key pair (run in `backend`, venv active):
+   ```
+   pip install -r requirements.txt
+   python scripts/gen_vapid.py
+   ```
+   It prints `VAPID_PUBLIC_KEY=...` and `VAPID_PRIVATE_KEY=...`.
+2. In Render -> `safesphere-api` -> **Environment** add both values. The private key is a secret: never commit it
+   or paste it into chat. Save and wait for **Live**.
+
+**What each contact does, once**
+1. Open their SafeSphere link and tap **Accept**.
+2. Tap **Turn on notifications** and allow the browser prompt. A test notification appears at once.
+   (Browsers do not allow any website to show notifications without this one tap. It cannot be skipped.)
+
+**What they then receive, with no page open**
+* Instant pop-ups: journey started, arrived safely, running late (after an alert), overdue, urgent, emergency, and
+  the silent duress alert. Emergency and urgent ones stay on screen until dismissed.
+* A regular **"on the way"** update every `PROGRESS_UPDATE_MINUTES` (default 15; set 0 to turn off), for example
+  "Neha is on the way to clg. About 25 min to go.", then "N min past the expected arrival" if she is late.
+  These go by push only, so they never cost money or fill an inbox.
+
+**Limits**
+* iPhone: needs iOS 16.4+, and the page must first be added to the Home Screen (Share -> Add to Home Screen).
+* The server must be awake to send the regular updates and overdue alerts. The free Render plan sleeps after about
+  15 minutes of no traffic, so use a paid always-on instance for this to be dependable.
+* Phone battery savers can delay notifications on some Android models.
+* If a contact removes the permission, the app notices and falls back to SMS or email automatically.
+
 ## 6. Security checklist before real users
 HTTPS only (Render provides it), strong `JWT_SECRET` (auto-generated), database not public, rate limiting on
 (uses real client IPs behind the proxy), Alembic migrations instead of auto-created tables, backups, and a privacy
