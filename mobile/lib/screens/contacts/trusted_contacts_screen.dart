@@ -155,12 +155,6 @@ class _TrustedContactsScreenState extends State<TrustedContactsScreen> {
     }
   }
 
-  Color _chipColor(String consent) => switch (consent) {
-        'CONFIRMED' => Colors.green,
-        'DECLINED' => Colors.red,
-        _ => Colors.orange,
-      };
-
   @override
   Widget build(BuildContext context) {
     // One scrollable surface: header, form and list move together, so the keyboard

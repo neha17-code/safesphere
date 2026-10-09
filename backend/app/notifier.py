@@ -83,8 +83,10 @@ class TwilioNotifier:
 class BrevoEmail:
     """Transactional email over HTTPS (port 443). Free plan: 300 emails/day, no card (Brevo's published terms)."""
     URL = "https://api.brevo.com/v3/smtp/email"
+    last_error = ""      # why the most recent send failed ("" after a success); never contains the API key
 
     def send_email(self, to: str, subject: str, body: str) -> bool:
+        self.last_error = ""
         payload = json.dumps({
             "sender": {"name": settings.email_from_name, "email": settings.email_from},
             "to": [{"email": to}],
@@ -101,9 +103,11 @@ class BrevoEmail:
                 reason = exc.read().decode("utf-8", "replace")[:300]
             except Exception:
                 reason = ""
+            self.last_error = f"HTTP {exc.code}: {reason}".strip()
             log.error("Brevo rejected the email: HTTP %s %s", exc.code, reason)
             return False
         except Exception as exc:  # never crash the scheduler, never log the key
+            self.last_error = f"Could not reach Brevo ({type(exc).__name__})"
             log.error("Brevo send failed: %s", type(exc).__name__)
             return False
 

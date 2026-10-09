@@ -101,6 +101,21 @@ class Brevo(unittest.TestCase):
             self.assertFalse(BrevoEmail().send_email("mom@example.com", "S", "B"))
 
 
+class BrevoLastError(unittest.TestCase):
+    def test_last_error_keeps_status_and_reason_but_not_the_key(self):
+        cfg = SimpleNamespace(brevo_api_key="SECRETKEY", email_from="me@x.com", email_from_name="SafeSphere")
+        err = urllib.error.HTTPError("https://x", 401, "no", {}, io.BytesIO(b'{"message":"unrecognised IP address"}'))
+        mailer = BrevoEmail()
+        with mock.patch("app.notifier.settings", cfg), mock.patch("urllib.request.urlopen", side_effect=err):
+            self.assertFalse(mailer.send_email("a@b.com", "S", "B"))
+        self.assertIn("401", mailer.last_error)
+        self.assertIn("unrecognised IP address", mailer.last_error)
+        self.assertNotIn("SECRETKEY", mailer.last_error)
+        with mock.patch("app.notifier.settings", cfg), mock.patch("urllib.request.urlopen", return_value=FakeResp()):
+            self.assertTrue(mailer.send_email("a@b.com", "S", "B"))
+        self.assertEqual(mailer.last_error, "")
+
+
 class WebPush(unittest.TestCase):
     CFG = SimpleNamespace(vapid_private_key="PRIV", vapid_subject="mailto:a@b.c")
     SUB = {"endpoint": "https://push.example/x", "keys": {"p256dh": "p", "auth": "a"}}

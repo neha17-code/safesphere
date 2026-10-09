@@ -19,6 +19,7 @@ from app.main import app
 from app.models import Contact, Journey, PushSubscription, utcnow
 from app import scheduler
 from app.routers import auth as auth_router
+from app.routers import status as status_router
 from app.notifier import ConsoleNotifier
 import app.alerts as alerts_mod
 import app.scheduler as scheduler_mod
@@ -36,6 +37,7 @@ def client():
     alerts_mod.notifier = box; scheduler_mod.notifier = box
     alerts_mod.emailer = None
     alerts_mod.pusher = None
+    status_router._limiter.reset()
     auth_router._limiter.reset()      # each test starts with a fresh login/register allowance
     with TestClient(app) as c:
         c.outbox = box
@@ -376,3 +378,25 @@ def test_page_offers_notifications_and_serves_the_service_worker(client):
     assert "Turn on notifications" in client.get(f"/c/{token}").text
     sw = client.get("/c/sw.js")
     assert sw.status_code == 200 and "addEventListener('push'" in sw.text
+
+
+class FailingEmail:
+    last_error = 'HTTP 401: {"message":"unrecognised IP address"}'
+
+    def send_email(self, to, subject, body):
+        return False
+
+
+def test_test_email_says_exactly_why_it_failed(client):
+    h = register(client)
+    alerts_mod.emailer = FailingEmail()
+    r = client.post("/status/test-email", headers=h).json()
+    assert r["ok"] is False and "401" in r["detail"] and "IP address" in r["hint"]
+
+
+def test_test_email_reports_not_configured_and_success(client):
+    h = register(client)
+    assert "not set up" in client.post("/status/test-email", headers=h).json()["detail"]
+    box = FakeEmail(); alerts_mod.emailer = box
+    r = client.post("/status/test-email", headers=h).json()
+    assert r["ok"] is True and box.sent[0][0] == "neha@example.com"

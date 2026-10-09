@@ -98,6 +98,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _testEmail() async {
+    _toast('Sending a test email...');
+    try {
+      final r = await StatusService().testEmail();
+      if (!mounted) return;
+      final hint = (r['hint'] as String?) ?? '';
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          scrollable: true,
+          title: Text(r['ok'] == true ? 'Email works' : 'Email failed'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('To: ${r['to']}'),
+              const SizedBox(height: 8),
+              Text('${r['detail']}'),
+              if (hint.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text('What to do: $hint'),
+              ],
+            ],
+          ),
+          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
+        ),
+      );
+    } on ApiException catch (e) {
+      _toast(e.message);
+    }
+  }
+
   Future<void> _logout() async {
     await _auth.logout();
     if (!mounted) return;
@@ -150,6 +182,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
               title: const Text('Alert channels on the server'),
               subtitle: Text(_channelsText()),
               isThreeLine: true,
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.mark_email_read_outlined),
+              title: const Text('Send a test email to myself'),
+              subtitle: const Text('Shows exactly why email works or fails'),
+              onTap: _testEmail,
             ),
             ListTile(
               contentPadding: EdgeInsets.zero,
